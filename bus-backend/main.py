@@ -317,6 +317,32 @@ def device_heartbeat(bus_id: str):
     return {"status": "ok"}
 
 
+@app.get("/api/devices")
+def get_devices():
+    """Get all connected devices."""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM devices ORDER BY bus_id").fetchall()
+    conn.close()
+    devices = []
+    for r in rows:
+        last_beat = r["last_heartbeat"]
+        # Mark offline if no heartbeat in last 2 minutes
+        if last_beat:
+            last_beat_time = datetime.datetime.fromisoformat(last_beat)
+            if (datetime.datetime.now() - last_beat_time).total_seconds() > 120:
+                status = "offline"
+            else:
+                status = r["status"]
+        else:
+            status = "unknown"
+        devices.append({
+            "bus_id": r["bus_id"],
+            "status": status,
+            "last_heartbeat": last_beat
+        })
+    return devices
+
+
 @app.get("/api/students")
 def get_all_students():
     """Get all enrolled students."""
