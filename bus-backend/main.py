@@ -345,387 +345,356 @@ def root():
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
     """Live enrollment dashboard with device tracking and event feed."""
-    html = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>School Bus - Central Dashboard</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        h1 { color: #1a3a52; margin-bottom: 30px; text-align: center; }
-        .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #ddd; }
-        .tab-btn { padding: 12px 24px; background: none; border: none; cursor: pointer; font-size: 16px; color: #666; border-bottom: 3px solid transparent; }
-        .tab-btn.active { color: #1a3a52; border-bottom-color: #1a3a52; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; font-weight: 600; color: #333; }
-        input[type=text], select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; }
-        
-        .camera-section { background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        video { width: 100%; max-width: 500px; border: 2px solid #ddd; border-radius: 4px; margin-bottom: 15px; display: block; }
-        canvas { display: none; }
-        
-        .photo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 15px 0; }
-        .photo-thumb { position: relative; aspect-ratio: 1; border-radius: 4px; overflow: hidden; border: 2px solid #e0e0e0; }
-        .photo-thumb img { width: 100%; height: 100%; object-fit: cover; }
-        .photo-thumb .remove { position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; font-size: 18px; }
-        
-        button { padding: 12px 24px; background: #1a3a52; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; margin-right: 10px; margin-bottom: 10px; }
-        button:hover { background: #0f2841; }
-        button:disabled { background: #ccc; cursor: not-allowed; }
-        .btn-secondary { background: #666; }
-        .btn-secondary:hover { background: #555; }
-        
-        .status { padding: 15px; border-radius: 4px; margin: 15px 0; }
-        .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .status.info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
-        
-        .device-list { background: #fff; padding: 20px; border-radius: 8px; }
-        .device-item { padding: 15px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
-        .device-item:last-child { border-bottom: none; }
-        .device-status { padding: 4px 12px; border-radius: 20px; font-size: 14px; font-weight: 600; }
-        .device-status.online { background: #d4edda; color: #155724; }
-        .device-status.offline { background: #f8d7da; color: #721c24; }
-        
-        .event-list { background: #fff; padding: 20px; border-radius: 8px; }
-        .event-item { padding: 15px; border-bottom: 1px solid #eee; }
-        .event-item:last-child { border-bottom: none; }
-        .event-header { display: flex; justify-content: space-between; margin-bottom: 5px; }
-        .event-type { font-weight: 600; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
-        .event-type.PICKED_UP { background: #d4edda; color: #155724; }
-        .event-type.DROPPED { background: #cfe2ff; color: #084298; }
-        .event-time { color: #666; font-size: 14px; }
-        
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
-        th { background: #f5f5f5; font-weight: 600; color: #333; }
-        tr:hover { background: #fafafa; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <h1>🚌 School Bus Central Dashboard</h1>
-        
-        <div class="tabs">
-          <button class="tab-btn active" onclick="showTab('enroll')">Enroll Student</button>
-          <button class="tab-btn" onclick="showTab('students')">All Students</button>
-          <button class="tab-btn" onclick="showTab('devices')">Connected Devices</button>
-          <button class="tab-btn" onclick="showTab('events')">Live Events</button>
-        </div>
-        
-        <!-- ENROLLMENT TAB -->
-        <div id="enroll" class="tab-content active">
-          <form id="enrollForm" style="background: #fff; padding: 20px; border-radius: 8px;">
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
-              <div class="form-group">
-                <label>Child ID</label>
-                <input type="text" name="child_id" placeholder="e.g. child_001" required>
-              </div>
-              <div class="form-group">
-                <label>Full Name</label>
-                <input type="text" name="name" placeholder="e.g. John Doe" required>
-              </div>
-              <div class="form-group">
-                <label>Assigned Bus ID</label>
-                <input type="text" name="bus_id" placeholder="e.g. bus_14" required>
-              </div>
-              <div class="form-group">
-                <label>Pickup Stop ID</label>
-                <input type="text" name="pickup_stop_id" placeholder="e.g. stop_1" required>
-              </div>
-              <div class="form-group">
-                <label>Drop Stop ID</label>
-                <input type="text" name="drop_stop_id" placeholder="e.g. stop_2" required>
-              </div>
-              <div class="form-group">
-                <label>Twin/Sibling Group (optional)</label>
-                <input type="text" name="twin_group" placeholder="Leave blank if none">
-              </div>
-            </div>
-            
-            <div class="camera-section">
-              <h3>📷 Capture Photos (Need 3-5)</h3>
-              <video id="camera" playsinline></video>
-              <canvas id="canvas"></canvas>
-              <div>
-                <button type="button" onclick="startCamera()">Start Camera</button>
-                <button type="button" onclick="capturePhoto()" id="captureBtn" disabled>Capture Photo</button>
-                <button type="button" onclick="stopCamera()" class="btn-secondary">Stop Camera</button>
-              </div>
-              <div class="photo-grid" id="photoGrid"></div>
-            </div>
-            
-            <div id="enrollStatus"></div>
-            
-            <button type="submit">Enroll Student</button>
-            <button type="button" onclick="clearPhotos()" class="btn-secondary">Clear Photos</button>
-          </form>
-        </div>
-        
-        <!-- STUDENTS TAB -->
-        <div id="students" class="tab-content">
-          <div style="background: #fff; padding: 20px; border-radius: 8px;">
-            <input type="text" id="searchBox" placeholder="Search by name or ID..." style="margin-bottom: 15px; width: 300px;">
-            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-              <thead style="background: #f5f5f5;">
-                <tr>
-                  <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd;">ID</th>
-                  <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd;">Name</th>
-                  <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd;">Bus</th>
-                  <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd;">Pickup</th>
-                  <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd;">Drop</th>
-                  <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd;">Photos</th>
-                </tr>
-              </thead>
-              <tbody id="studentsList">
-                <tr><td colspan="6" style="padding: 20px; text-align: center; color: #999;">Loading...</td></tr>
-              </tbody>
-            </table>
+    return """<!DOCTYPE html>
+<html>
+<head>
+  <title>School Bus - Central Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    h1 { color: #1a3a52; margin-bottom: 30px; text-align: center; }
+    .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #ddd; }
+    .tab-btn { padding: 12px 24px; background: none; border: none; cursor: pointer; font-size: 16px; color: #666; border-bottom: 3px solid transparent; }
+    .tab-btn.active { color: #1a3a52; border-bottom-color: #1a3a52; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    
+    .form-group { margin-bottom: 20px; }
+    label { display: block; margin-bottom: 8px; font-weight: 600; color: #333; }
+    input[type=text], select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; }
+    
+    .camera-section { background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+    video { width: 100%; max-width: 500px; border: 2px solid #ddd; border-radius: 4px; margin-bottom: 15px; display: block; }
+    canvas { display: none; }
+    
+    .photo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 15px 0; }
+    .photo-thumb { position: relative; aspect-ratio: 1; border-radius: 4px; overflow: hidden; border: 2px solid #e0e0e0; }
+    .photo-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .photo-thumb .remove { position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; font-size: 18px; }
+    
+    button { padding: 12px 24px; background: #1a3a52; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; margin-right: 10px; margin-bottom: 10px; }
+    button:hover { background: #0f2841; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .btn-secondary { background: #666; }
+    .btn-secondary:hover { background: #555; }
+    
+    .status { padding: 15px; border-radius: 4px; margin: 15px 0; }
+    .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    .status.info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+    
+    .device-list { background: #fff; padding: 20px; border-radius: 8px; }
+    .device-item { padding: 15px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+    .device-item:last-child { border-bottom: none; }
+    .device-status { padding: 4px 12px; border-radius: 20px; font-size: 14px; font-weight: 600; }
+    .device-status.online { background: #d4edda; color: #155724; }
+    .device-status.offline { background: #f8d7da; color: #721c24; }
+    
+    .event-list { background: #fff; padding: 20px; border-radius: 8px; }
+    .event-item { padding: 15px; border-bottom: 1px solid #eee; }
+    .event-item:last-child { border-bottom: none; }
+    .event-header { display: flex; justify-content: space-between; margin-bottom: 5px; }
+    .event-type { font-weight: 600; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+    .event-type.PICKED_UP { background: #d4edda; color: #155724; }
+    .event-type.DROPPED { background: #cfe2ff; color: #084298; }
+    .event-time { color: #666; font-size: 14px; }
+    
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: #f5f5f5; font-weight: 600; color: #333; }
+    tr:hover { background: #fafafa; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🚌 School Bus Central Dashboard</h1>
+    
+    <div class="tabs">
+      <button class="tab-btn active" onclick="window.showTab('enroll')">Enroll Student</button>
+      <button class="tab-btn" onclick="window.showTab('students')">All Students</button>
+      <button class="tab-btn" onclick="window.showTab('devices')">Connected Devices</button>
+      <button class="tab-btn" onclick="window.showTab('events')">Live Events</button>
+    </div>
+    
+    <!-- ENROLLMENT TAB -->
+    <div id="enroll" class="tab-content active">
+      <form id="enrollForm" style="background: #fff; padding: 20px; border-radius: 8px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+          <div class="form-group">
+            <label>Child ID</label>
+            <input type="text" name="child_id" placeholder="e.g. child_001" required>
           </div>
-          <button onclick="loadStudents()" style="margin-top: 20px;">Refresh</button>
+          <div class="form-group">
+            <label>Full Name</label>
+            <input type="text" name="name" placeholder="e.g. John Doe" required>
+          </div>
+          <div class="form-group">
+            <label>Assigned Bus ID</label>
+            <input type="text" name="bus_id" placeholder="e.g. bus_14" required>
+          </div>
+          <div class="form-group">
+            <label>Pickup Stop ID</label>
+            <input type="text" name="pickup_stop_id" placeholder="e.g. stop_1" required>
+          </div>
+          <div class="form-group">
+            <label>Drop Stop ID</label>
+            <input type="text" name="drop_stop_id" placeholder="e.g. stop_2" required>
+          </div>
+          <div class="form-group">
+            <label>Twin/Sibling Group (optional)</label>
+            <input type="text" name="twin_group" placeholder="Leave blank if none">
+          </div>
         </div>
         
-        <!-- DEVICES TAB -->
-        <div id="devices" class="tab-content">
-          <div class="device-list" id="devicesList">
-            <p>Loading devices...</p>
+        <div class="camera-section">
+          <h3>📷 Capture Photos (Need 3-5)</h3>
+          <video id="camera" playsinline></video>
+          <canvas id="canvas"></canvas>
+          <div>
+            <button type="button" onclick="window.startCamera()">Start Camera</button>
+            <button type="button" onclick="window.capturePhoto()" id="captureBtn" disabled>Capture Photo</button>
+            <button type="button" onclick="window.stopCamera()" class="btn-secondary">Stop Camera</button>
           </div>
-          <button onclick="loadDevices()" style="margin-top: 20px;">Refresh</button>
+          <div class="photo-grid" id="photoGrid"></div>
         </div>
         
-        <!-- EVENTS TAB -->
-        <div id="events" class="tab-content">
-          <div class="event-list" id="eventsList">
-            <p>Loading events...</p>
-          </div>
-          <button onclick="loadEvents()" style="margin-top: 20px;">Refresh</button>
-        </div>
+        <div id="enrollStatus"></div>
+        
+        <button type="submit">Enroll Student</button>
+        <button type="button" onclick="window.clearPhotos()" class="btn-secondary">Clear Photos</button>
+      </form>
+    </div>
+    
+    <!-- STUDENTS TAB -->
+    <div id="students" class="tab-content">
+      <div style="background: #fff; padding: 20px; border-radius: 8px;">
+        <input type="text" id="searchBox" placeholder="Search by name or ID..." style="margin-bottom: 15px; width: 300px;">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Bus</th>
+              <th>Pickup</th>
+              <th>Drop</th>
+              <th style="text-align: center;">Photos</th>
+            </tr>
+          </thead>
+          <tbody id="studentsList">
+            <tr><td colspan="6" style="padding: 20px; text-align: center; color: #999;">Loading...</td></tr>
+          </tbody>
+        </table>
       </div>
+      <button onclick="window.loadStudents()" style="margin-top: 20px;">Refresh</button>
+    </div>
+    
+    <!-- DEVICES TAB -->
+    <div id="devices" class="tab-content">
+      <div class="device-list" id="devicesList">
+        <p>Loading devices...</p>
+      </div>
+      <button onclick="window.loadDevices()" style="margin-top: 20px;">Refresh</button>
+    </div>
+    
+    <!-- EVENTS TAB -->
+    <div id="events" class="tab-content">
+      <div class="event-list" id="eventsList">
+        <p>Loading events...</p>
+      </div>
+      <button onclick="window.loadEvents()" style="margin-top: 20px;">Refresh</button>
+    </div>
+  </div>
 
-      <script>
-        let photos = [];
-        let stream = null;
-        
-        async function startCamera() {
-          try {
-            // Check if we're on HTTPS or localhost for camera access
-            if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-              alert('Camera access requires HTTPS. Please access the dashboard via HTTPS or localhost.');
-              return;
-            }
-            
-            // Check if mediaDevices is available
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-              alert('Camera not supported on this browser. Try Chrome, Firefox, or Edge.');
-              return;
-            }
-            
-            stream = await navigator.mediaDevices.getUserMedia({ 
-              video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } 
-            });
-            document.getElementById('camera').srcObject = stream;
-            document.getElementById('captureBtn').disabled = false;
-          } catch (err) {
-            alert('Camera access denied: ' + err.message + '\n\nMake sure:\n1. You gave browser permission\n2. Using HTTPS or localhost\n3. Camera is not in use by another app');
-          }
+  <script>
+    let photos = [];
+    let stream = null;
+    
+    window.startCamera = async function() {
+      try {
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+          alert('Camera access requires HTTPS or localhost');
+          return;
         }
-        
-        function stopCamera() {
-          if (stream) {
-            stream.getTracks().forEach(t => t.stop());
-            document.getElementById('camera').srcObject = null;
-            document.getElementById('captureBtn').disabled = true;
-          }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          alert('Camera not supported');
+          return;
         }
-        
-        function capturePhoto() {
-          const video = document.getElementById('camera');
-          const canvas = document.getElementById('canvas');
-          const ctx = canvas.getContext('2d');
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          ctx.drawImage(video, 0, 0);
-          
-          const b64 = canvas.toDataURL('image/jpeg').split(',')[1];
-          photos.push(b64);
-          
-          // Show thumbnail
-          const div = document.createElement('div');
-          div.className = 'photo-thumb';
-          const img = document.createElement('img');
-          img.src = 'data:image/jpeg;base64,' + b64;
-          div.appendChild(img);
-          const btn = document.createElement('button');
-          btn.className = 'remove';
-          btn.type = 'button';
-          btn.textContent = '×';
-          btn.onclick = (e) => { e.preventDefault(); photos.splice(photos.indexOf(b64), 1); div.remove(); };
-          div.appendChild(btn);
-          document.getElementById('photoGrid').appendChild(div);
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+        document.getElementById('camera').srcObject = stream;
+        document.getElementById('captureBtn').disabled = false;
+      } catch (err) {
+        alert('Camera error: ' + err.message);
+      }
+    };
+    
+    window.stopCamera = function() {
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        document.getElementById('camera').srcObject = null;
+        document.getElementById('captureBtn').disabled = true;
+      }
+    };
+    
+    window.capturePhoto = function() {
+      const video = document.getElementById('camera');
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+      const b64 = canvas.toDataURL('image/jpeg').split(',')[1];
+      photos.push(b64);
+      const div = document.createElement('div');
+      div.className = 'photo-thumb';
+      const img = document.createElement('img');
+      img.src = 'data:image/jpeg;base64,' + b64;
+      div.appendChild(img);
+      const btn = document.createElement('button');
+      btn.className = 'remove';
+      btn.type = 'button';
+      btn.textContent = '×';
+      btn.onclick = (e) => { e.preventDefault(); photos.splice(photos.indexOf(b64), 1); div.remove(); };
+      div.appendChild(btn);
+      document.getElementById('photoGrid').appendChild(div);
+    };
+    
+    window.clearPhotos = function() {
+      photos = [];
+      document.getElementById('photoGrid').innerHTML = '';
+    };
+    
+    window.showTab = function(name) {
+      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById(name).classList.add('active');
+      event.target.classList.add('active');
+      if (name === 'students') window.loadStudents();
+      else if (name === 'devices') window.loadDevices();
+      else if (name === 'events') window.loadEvents();
+    };
+    
+    window.loadStudents = async function() {
+      try {
+        const resp = await fetch('/api/students');
+        const students = await resp.json();
+        const tbody = document.getElementById('studentsList');
+        if (students.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="padding: 20px; text-align: center;">No students enrolled yet.</td></tr>';
+          return;
         }
-        
-        function clearPhotos() {
-          photos = [];
-          document.getElementById('photoGrid').innerHTML = '';
+        const html = students.map((s, idx) => `
+          <tr style="background: ${idx % 2 === 0 ? '#fff' : '#fafafa'};">
+            <td><code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px;">${s.child_id}</code></td>
+            <td><strong>${s.name}</strong></td>
+            <td>${s.assigned_bus_id || '-'}</td>
+            <td>${s.pickup_stop_id || '-'}</td>
+            <td>${s.drop_stop_id || '-'}</td>
+            <td style="text-align: center;"><span style="background: #e3f2fd; padding: 2px 8px; border-radius: 12px; font-size: 12px;">${s.encoding_count}</span></td>
+          </tr>
+        `).join('');
+        tbody.innerHTML = html;
+      } catch (e) {
+        document.getElementById('studentsList').innerHTML = '<tr><td colspan="6" style="color: red;">Error: ' + e.message + '</td></tr>';
+      }
+    };
+    
+    window.loadDevices = async function() {
+      try {
+        const resp = await fetch('/api/devices');
+        const devices = await resp.json();
+        const html = devices.map(d => `
+          <div class="device-item">
+            <div><strong>${d.bus_id}</strong><br><small>${d.last_heartbeat ? new Date(d.last_heartbeat).toLocaleString() : 'Never'}</small></div>
+            <div class="device-status ${d.status}">${d.status.toUpperCase()}</div>
+          </div>
+        `).join('');
+        document.getElementById('devicesList').innerHTML = html || '<p>No devices</p>';
+      } catch (e) {
+        document.getElementById('devicesList').innerHTML = '<p style="color:red;">Error: ' + e.message + '</p>';
+      }
+    };
+    
+    window.loadEvents = async function() {
+      try {
+        const resp = await fetch('/api/live');
+        const events = await resp.json();
+        const html = events.slice(0, 20).map(e => `
+          <div class="event-item">
+            <div class="event-header">
+              <div><strong>${e.child_id}</strong> <span class="event-type ${e.event_type}">${e.event_type}</span></div>
+            </div>
+            <div style="font-size: 14px; color: #666;">Bus: ${e.bus_id} | Confidence: ${e.confidence ? e.confidence.toFixed(3) : 'N/A'}</div>
+            <div class="event-time">${new Date(e.timestamp).toLocaleString()}</div>
+          </div>
+        `).join('');
+        document.getElementById('eventsList').innerHTML = html || '<p>No events</p>';
+      } catch (e) {
+        document.getElementById('eventsList').innerHTML = '<p style="color:red;">Error: ' + e.message + '</p>';
+      }
+    };
+    
+    document.getElementById('enrollForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const statusEl = document.getElementById('enrollStatus');
+      if (photos.length < 3) {
+        statusEl.className = 'status error';
+        statusEl.textContent = 'Need 3+ photos';
+        return;
+      }
+      const formData = new FormData(e.target);
+      const payload = {
+        child_id: formData.get('child_id'),
+        name: formData.get('name'),
+        bus_id: formData.get('bus_id'),
+        pickup_stop_id: formData.get('pickup_stop_id'),
+        drop_stop_id: formData.get('drop_stop_id'),
+        twin_group: formData.get('twin_group') || null,
+        photos: photos
+      };
+      statusEl.className = 'status info';
+      statusEl.textContent = 'Processing...';
+      try {
+        const resp = await fetch('/api/enroll/centralized', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await resp.json();
+        if (resp.ok) {
+          statusEl.className = 'status success';
+          statusEl.textContent = data.message;
+          window.clearPhotos();
+          e.target.reset();
+          window.loadStudents();
+        } else {
+          statusEl.className = 'status error';
+          statusEl.textContent = 'Error: ' + data.message;
         }
-        
-        function showTab(name) {
-          document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-          document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-          document.getElementById(name).classList.add('active');
-          event.target.classList.add('active');
-          
-          if (name === 'students') loadStudents();
-          else if (name === 'devices') loadDevices();
-          else if (name === 'events') loadEvents();
-        }
-        
-        async function loadStudents() {
-          try {
-            const resp = await fetch('/api/students');
-            const students = await resp.json();
-            
-            const tbody = document.getElementById('studentsList');
-            if (students.length === 0) {
-              tbody.innerHTML = '<tr><td colspan="6" style="padding: 20px; text-align: center; color: #999;">No students enrolled yet.</td></tr>';
-              return;
-            }
-            
-            const html = students.map((s, idx) => `
-              <tr style="background: ${idx % 2 === 0 ? '#fff' : '#fafafa'};">
-                <td><code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px;">${s.child_id}</code></td>
-                <td><strong>${s.name}</strong></td>
-                <td>${s.assigned_bus_id || '-'}</td>
-                <td>${s.pickup_stop_id || '-'}</td>
-                <td>${s.drop_stop_id || '-'}</td>
-                <td style="text-align: center;"><span style="background: #e3f2fd; padding: 2px 8px; border-radius: 12px; font-size: 12px;">${s.encoding_count}</span></td>
-              </tr>
-            `).join('');
-            tbody.innerHTML = html;
-          } catch (e) {
-            document.getElementById('studentsList').innerHTML = '<tr><td colspan="6" style="padding: 20px; color: red;">Error loading students</td></tr>';
-          }
-        }
-        
-        async function loadDevices() {
-          try {
-            const resp = await fetch('/api/devices');
-            const devices = await resp.json();
-            const html = devices.map(d => `
-              <div class="device-item">
-                <div>
-                  <strong>${d.bus_id}</strong><br>
-                  <small>${d.last_heartbeat ? new Date(d.last_heartbeat).toLocaleString() : 'Never'}</small>
-                </div>
-                <div class="device-status ${d.status}">${d.status.toUpperCase()}</div>
-              </div>
-            `).join('');
-            document.getElementById('devicesList').innerHTML = html || '<p>No devices connected yet.</p>';
-          } catch (e) {
-            document.getElementById('devicesList').innerHTML = '<p style="color:red;">Error loading devices</p>';
-          }
-        }
-        
-        async function loadEvents() {
-          try {
-            const resp = await fetch('/api/live');
-            const events = await resp.json();
-            const html = events.slice(0, 20).map(e => `
-              <div class="event-item">
-                <div class="event-header">
-                  <div>
-                    <strong>${e.child_id}</strong><span class="event-type ${e.event_type}">${e.event_type}</span>
-                  </div>
-                </div>
-                <div style="font-size: 14px; color: #666;">
-                  Bus: ${e.bus_id} | Confidence: ${e.confidence ? e.confidence.toFixed(3) : 'N/A'}
-                </div>
-                <div class="event-time">${new Date(e.timestamp).toLocaleString()}</div>
-              </div>
-            `).join('');
-            document.getElementById('eventsList').innerHTML = html || '<p>No events yet.</p>';
-          } catch (e) {
-            document.getElementById('eventsList').innerHTML = '<p style="color:red;">Error loading events</p>';
-          }
-        }
-        
-        document.getElementById('enrollForm').addEventListener('submit', async (e) => {
-          e.preventDefault();
-          const statusEl = document.getElementById('enrollStatus');
-          
-          if (photos.length < 3) {
-            statusEl.className = 'status error';
-            statusEl.textContent = 'Please capture at least 3 photos';
-            return;
-          }
-          
-          const formData = new FormData(e.target);
-          const payload = {
-            child_id: formData.get('child_id'),
-            name: formData.get('name'),
-            bus_id: formData.get('bus_id'),
-            pickup_stop_id: formData.get('pickup_stop_id'),
-            drop_stop_id: formData.get('drop_stop_id'),
-            twin_group: formData.get('twin_group') || null,
-            photos: photos
-          };
-          
-          statusEl.className = 'status info';
-          statusEl.textContent = 'Processing photos and enrolling... This may take 30-60 seconds.';
-          
-          try {
-            const resp = await fetch('/api/enroll/centralized', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            });
-            const data = await resp.json();
-            
-            if (resp.ok) {
-              statusEl.className = 'status success';
-              statusEl.textContent = data.message;
-              clearPhotos();
-              e.target.reset();
-              // Reload students table
-              loadStudents();
-            } else {
-              statusEl.className = 'status error';
-              statusEl.textContent = 'Error: ' + data.message;
-            }
-          } catch (err) {
-            statusEl.className = 'status error';
-            statusEl.textContent = 'Error: ' + err.message;
-          }
+      } catch (err) {
+        statusEl.className = 'status error';
+        statusEl.textContent = 'Error: ' + err.message;
+      }
+    });
+    
+    const searchBox = document.getElementById('searchBox');
+    if (searchBox) {
+      searchBox.addEventListener('keyup', (e) => {
+        const query = e.target.value.toLowerCase();
+        document.querySelectorAll('#studentsList tr').forEach(row => {
+          row.style.display = row.textContent.toLowerCase().includes(query) ? '' : 'none';
         });
-        
-        // Add search functionality
-        document.getElementById('searchBox').addEventListener('keyup', (e) => {
-          const query = e.target.value.toLowerCase();
-          document.querySelectorAll('#studentsList tr').forEach(row => {
-            const text = row.textContent.toLowerCase();
-            row.style.display = text.includes(query) ? '' : 'none';
-          });
-        });
-        
-        // Auto-refresh every 5 seconds
-        setInterval(() => {
-          const active = document.querySelector('.tab-content.active');
-          if (!active) return;
-          const id = active.id;
-          if (id === 'devices') loadDevices();
-          else if (id === 'events') loadEvents();
-        }, 5000);
-      </script>
-    </body>
-    </html>
-    """
-    return html
+      });
+    }
+    
+    setInterval(() => {
+      const active = document.querySelector('.tab-content.active');
+      if (!active) return;
+      const id = active.id;
+      if (id === 'devices') window.loadDevices();
+      else if (id === 'events') window.loadEvents();
+    }, 5000);
+  </script>
+</body>
+</html>
+"""
 
 
 # ---- Centralized Enrollment (browser uploads photos to backend) ----
