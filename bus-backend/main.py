@@ -317,30 +317,24 @@ def device_heartbeat(bus_id: str):
     return {"status": "ok"}
 
 
-@app.get("/api/devices")
-def get_devices():
-    """Get all connected devices."""
+@app.get("/api/students")
+def get_all_students():
+    """Get all enrolled students."""
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM devices ORDER BY bus_id").fetchall()
+    rows = conn.execute("SELECT * FROM students ORDER BY name").fetchall()
     conn.close()
-    devices = []
+    students = []
     for r in rows:
-        last_beat = r["last_heartbeat"]
-        # Mark offline if no heartbeat in last 2 minutes
-        if last_beat:
-            last_beat_time = datetime.datetime.fromisoformat(last_beat)
-            if (datetime.datetime.now() - last_beat_time).total_seconds() > 120:
-                status = "offline"
-            else:
-                status = r["status"]
-        else:
-            status = "unknown"
-        devices.append({
-            "bus_id": r["bus_id"],
-            "status": status,
-            "last_heartbeat": last_beat
+        students.append({
+            "child_id": r["child_id"],
+            "name": r["name"],
+            "assigned_bus_id": r["assigned_bus_id"],
+            "pickup_stop_id": r["pickup_stop_id"],
+            "drop_stop_id": r["drop_stop_id"],
+            "twin_group": r["twin_group"],
+            "encoding_count": len(json.loads(r["encodings"]))
         })
-    return devices
+    return students
 
 
 @app.get("/")
@@ -407,6 +401,11 @@ def dashboard():
         .event-type.PICKED_UP { background: #d4edda; color: #155724; }
         .event-type.DROPPED { background: #cfe2ff; color: #084298; }
         .event-time { color: #666; font-size: 14px; }
+        
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f5f5f5; font-weight: 600; color: #333; }
+        tr:hover { background: #fafafa; }
       </style>
     </head>
     <body>
@@ -415,6 +414,7 @@ def dashboard():
         
         <div class="tabs">
           <button class="tab-btn active" onclick="showTab('enroll')">Enroll Student</button>
+          <button class="tab-btn" onclick="showTab('students')">All Students</button>
           <button class="tab-btn" onclick="showTab('devices')">Connected Devices</button>
           <button class="tab-btn" onclick="showTab('events')">Live Events</button>
         </div>
@@ -468,6 +468,29 @@ def dashboard():
           </form>
         </div>
         
+        <!-- STUDENTS TAB -->
+        <div id="students" class="tab-content">
+          <div style="background: #fff; padding: 20px; border-radius: 8px;">
+            <input type="text" id="searchBox" placeholder="Search by name or ID..." style="margin-bottom: 15px; width: 300px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <thead style="background: #f5f5f5;">
+                <tr>
+                  <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd;">ID</th>
+                  <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd;">Name</th>
+                  <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd;">Bus</th>
+                  <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd;">Pickup</th>
+                  <th style="padding: 12px; text-align: left; border-bottom: 2px solid #ddd;">Drop</th>
+                  <th style="padding: 12px; text-align: center; border-bottom: 2px solid #ddd;">Photos</th>
+                </tr>
+              </thead>
+              <tbody id="studentsList">
+                <tr><td colspan="6" style="padding: 20px; text-align: center; color: #999;">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <button onclick="loadStudents()" style="margin-top: 20px;">Refresh</button>
+        </div>
+        
         <!-- DEVICES TAB -->
         <div id="devices" class="tab-content">
           <div class="device-list" id="devicesList">
@@ -491,11 +514,25 @@ def dashboard():
         
         async function startCamera() {
           try {
-            stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+            // Check if we're on HTTPS or localhost for camera access
+            if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+              alert('Camera access requires HTTPS. Please access the dashboard via HTTPS or localhost.');
+              return;
+            }
+            
+            // Check if mediaDevices is available
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+              alert('Camera not supported on this browser. Try Chrome, Firefox, or Edge.');
+              return;
+            }
+            
+            stream = await navigator.mediaDevices.getUserMedia({ 
+              video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } 
+            });
             document.getElementById('camera').srcObject = stream;
             document.getElementById('captureBtn').disabled = false;
           } catch (err) {
-            alert('Camera access denied: ' + err.message);
+            alert('Camera access denied: ' + err.message + '\n\nMake sure:\n1. You gave browser permission\n2. Using HTTPS or localhost\n3. Camera is not in use by another app');
           }
         }
         
@@ -544,8 +581,36 @@ def dashboard():
           document.getElementById(name).classList.add('active');
           event.target.classList.add('active');
           
-          if (name === 'devices') loadDevices();
+          if (name === 'students') loadStudents();
+          else if (name === 'devices') loadDevices();
           else if (name === 'events') loadEvents();
+        }
+        
+        async function loadStudents() {
+          try {
+            const resp = await fetch('/api/students');
+            const students = await resp.json();
+            
+            const tbody = document.getElementById('studentsList');
+            if (students.length === 0) {
+              tbody.innerHTML = '<tr><td colspan="6" style="padding: 20px; text-align: center; color: #999;">No students enrolled yet.</td></tr>';
+              return;
+            }
+            
+            const html = students.map((s, idx) => `
+              <tr style="background: ${idx % 2 === 0 ? '#fff' : '#fafafa'};">
+                <td><code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px;">${s.child_id}</code></td>
+                <td><strong>${s.name}</strong></td>
+                <td>${s.assigned_bus_id || '-'}</td>
+                <td>${s.pickup_stop_id || '-'}</td>
+                <td>${s.drop_stop_id || '-'}</td>
+                <td style="text-align: center;"><span style="background: #e3f2fd; padding: 2px 8px; border-radius: 12px; font-size: 12px;">${s.encoding_count}</span></td>
+              </tr>
+            `).join('');
+            tbody.innerHTML = html;
+          } catch (e) {
+            document.getElementById('studentsList').innerHTML = '<tr><td colspan="6" style="padding: 20px; color: red;">Error loading students</td></tr>';
+          }
         }
         
         async function loadDevices() {
@@ -627,6 +692,8 @@ def dashboard():
               statusEl.textContent = data.message;
               clearPhotos();
               e.target.reset();
+              // Reload students table
+              loadStudents();
             } else {
               statusEl.className = 'status error';
               statusEl.textContent = 'Error: ' + data.message;
@@ -637,11 +704,22 @@ def dashboard():
           }
         });
         
+        // Add search functionality
+        document.getElementById('searchBox').addEventListener('keyup', (e) => {
+          const query = e.target.value.toLowerCase();
+          document.querySelectorAll('#studentsList tr').forEach(row => {
+            const text = row.textContent.toLowerCase();
+            row.style.display = text.includes(query) ? '' : 'none';
+          });
+        });
+        
         // Auto-refresh every 5 seconds
         setInterval(() => {
-          const active = document.querySelector('.tab-content.active').id;
-          if (active === 'devices') loadDevices();
-          else if (active === 'events') loadEvents();
+          const active = document.querySelector('.tab-content.active');
+          if (!active) return;
+          const id = active.id;
+          if (id === 'devices') loadDevices();
+          else if (id === 'events') loadEvents();
         }, 5000);
       </script>
     </body>
