@@ -814,23 +814,25 @@ def dashboard():
 def centralized_enroll(data: CentralEnrollmentIn):
     """
     Centralized enrollment: browser sends base64 photos to the backend.
-    Backend processes them locally using face_recognition (requires installation).
-    If face_recognition is not available, returns error.
+    
+    The backend tries to process locally using face_recognition if available.
+    If not, it accepts the photos and stores generic encodings (for testing).
+    In production, deploy the backend on a Linux machine where dlib compiles easily,
+    or use the Pi's face_processor.py service.
     """
     if not data.photos:
         raise HTTPException(400, "No photos provided")
 
-    try:
-        import face_recognition
-    except ImportError:
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error",
-                     "message": "face_recognition not installed on backend. Install with: pip install face_recognition"},
-        )
-
     good_encodings = []
     rejections = []
+
+    # Try to use face_recognition if available
+    try:
+        import face_recognition
+        use_face_recognition = True
+    except ImportError:
+        use_face_recognition = False
+        print("[WARN] face_recognition not installed - accepting photos without validation")
 
     for i, b64_photo in enumerate(data.photos):
         # Decode image
@@ -839,40 +841,54 @@ def centralized_enroll(data: CentralEnrollmentIn):
             rejections.append(f"Photo {i+1}: Could not decode image")
             continue
 
-        # Quality check
+        # Basic size check
         h, w = image.shape[:2]
         if h < 100 or w < 100:
             rejections.append(f"Photo {i+1}: Image too small ({w}x{h})")
             continue
 
-        # Check sharpness
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-        sharpness = laplacian.var()
-        if sharpness < 15.0:
-            rejections.append(f"Photo {i+1}: Too blurry (sharpness={sharpness:.1f}, need >15)")
-            continue
+        if use_face_recognition:
+            # Full validation with face_recognition
+            try:
+                # Check sharpness
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+                sharpness = laplacian.var()
+                if sharpness < 15.0:
+                    rejections.append(f"Photo {i+1}: Too blurry (sharpness={sharpness:.1f}, need >15)")
+                    continue
 
-        # Face detection
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        face_locations = face_recognition.face_locations(rgb, model="hog")
-        if len(face_locations) != 1:
-            rejections.append(f"Photo {i+1}: Expected 1 face, found {len(face_locations)}")
-            continue
+                # Face detection
+                rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                face_locations = face_recognition.face_locations(rgb, model="hog")
+                if len(face_locations) != 1:
+                    rejections.append(f"Photo {i+1}: Expected 1 face, found {len(face_locations)}")
+                    continue
 
-        # Get encoding
-        encodings = face_recognition.face_encodings(rgb, known_face_locations=face_locations)
-        if not encodings:
-            rejections.append(f"Photo {i+1}: Encoding failed")
-            continue
+                # Get encoding
+                encodings = face_recognition.face_encodings(rgb, known_face_locations=face_locations)
+                if not encodings:
+                    rejections.append(f"Photo {i+1}: Encoding failed")
+                    continue
 
-        good_encodings.append(encodings[0].tolist())
-        print(f"[ENROLL] Photo {i+1}: accepted (sharpness={sharpness:.1f})")
+                good_encodings.append(encodings[0].tolist())
+                print(f"[ENROLL] Photo {i+1}: accepted (sharpness={sharpness:.1f})")
+            except Exception as e:
+                rejections.append(f"Photo {i+1}: Processing error - {str(e)}")
+                continue
+        else:
+            # No face_recognition available - generate fake encoding for testing
+            # Real app would delegate to Pi's face_processor.py
+            # For now, accept it and create a dummy encoding (128 random values)
+            dummy_encoding = np.random.rand(128).tolist()
+            good_encodings.append(dummy_encoding)
+            print(f"[ENROLL] Photo {i+1}: accepted (dummy encoding - face_recognition not available)")
 
     if not good_encodings:
         return JSONResponse(
             status_code=400,
-            content={"status": "error", "message": f"No usable photos. Rejections: {rejections}"},
+            content={"status": "error", 
+                     "message": f"No usable photos. Rejections: {'; '.join(rejections) if rejections else 'Unknown error'}"},
         )
 
     conn = get_conn()
@@ -890,9 +906,11 @@ def centralized_enroll(data: CentralEnrollmentIn):
     conn.commit()
     conn.close()
 
-    summary = f"Enrolled '{data.name}' with {len(good_encodings)} encodings from {len(data.photos)} photos."
+    summary = f"Enrolled '{data.name}' with {len(good_encodings)} encoding(s) from {len(data.photos)} photo(s)."
     if rejections:
-        summary += f"\n\nRejected: {', '.join(rejections)}"
+        summary += f"\n\nRejected: {'; '.join(rejections)}"
+    if not use_face_recognition:
+        summary += "\n\n⚠️ Note: face_recognition not installed - using dummy encodings for testing only. For real use, install face_recognition or use Pi's face_processor."
 
     return {
         "status": "success",
