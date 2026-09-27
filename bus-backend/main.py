@@ -813,29 +813,61 @@ def dashboard():
 @app.post("/api/enroll/centralized")
 def centralized_enroll(data: CentralEnrollmentIn):
     """
-    Centralized enrollment: browser sends base64 photos to the backend, which
-    forwards them to face_processor.py running on the Pi (NOT processed here -
-    the backend never imports face_recognition/dlib, avoiding the Windows dlib
-    install problem entirely). The Pi does quality checks + encoding and returns
-    the result; the backend just stores it and every device's next sync picks it up.
+    Centralized enrollment: browser sends base64 photos to the backend.
+    Backend processes them locally using face_recognition (requires installation).
+    If face_recognition is not available, returns error.
     """
     if not data.photos:
         raise HTTPException(400, "No photos provided")
 
     try:
-        resp = requests.post(f"{FACE_PROCESSOR_URL}/encode", json={"photos": data.photos}, timeout=30)
-        resp.raise_for_status()
-        result = resp.json()
-    except Exception as e:
+        import face_recognition
+    except ImportError:
         return JSONResponse(
-            status_code=502,
+            status_code=500,
             content={"status": "error",
-                     "message": f"Could not reach face processor at {FACE_PROCESSOR_URL} "
-                                f"(is face_processor.py running on the Pi?): {e}"},
+                     "message": "face_recognition not installed on backend. Install with: pip install face_recognition"},
         )
 
-    good_encodings = result.get("encodings", [])
-    rejections = result.get("rejections", [])
+    good_encodings = []
+    rejections = []
+
+    for i, b64_photo in enumerate(data.photos):
+        # Decode image
+        image = base64_to_cv2(b64_photo)
+        if image is None:
+            rejections.append(f"Photo {i+1}: Could not decode image")
+            continue
+
+        # Quality check
+        h, w = image.shape[:2]
+        if h < 100 or w < 100:
+            rejections.append(f"Photo {i+1}: Image too small ({w}x{h})")
+            continue
+
+        # Check sharpness
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+        sharpness = laplacian.var()
+        if sharpness < 15.0:
+            rejections.append(f"Photo {i+1}: Too blurry (sharpness={sharpness:.1f}, need >15)")
+            continue
+
+        # Face detection
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        face_locations = face_recognition.face_locations(rgb, model="hog")
+        if len(face_locations) != 1:
+            rejections.append(f"Photo {i+1}: Expected 1 face, found {len(face_locations)}")
+            continue
+
+        # Get encoding
+        encodings = face_recognition.face_encodings(rgb, known_face_locations=face_locations)
+        if not encodings:
+            rejections.append(f"Photo {i+1}: Encoding failed")
+            continue
+
+        good_encodings.append(encodings[0].tolist())
+        print(f"[ENROLL] Photo {i+1}: accepted (sharpness={sharpness:.1f})")
 
     if not good_encodings:
         return JSONResponse(
