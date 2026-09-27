@@ -40,7 +40,7 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 # is delegated to face_processor.py running on the Pi (where dlib is already
 # proven working via piwheels). Set this to your Pi's actual address.
 import os
-FACE_PROCESSOR_URL = os.environ.get("FACE_PROCESSOR_URL", "http://192.168.1.72:8095")
+FACE_PROCESSOR_URL = os.environ.get("FACE_PROCESSOR_URL", "http://192.168.29.220:8095")
 
 app = FastAPI(title="Bus Pickup/Drop Backend (dev)")
 
