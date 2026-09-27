@@ -36,6 +36,12 @@ import cv2
 DB_PATH = Path(__file__).parent / "data" / "backend.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+# The backend NEVER imports face_recognition/dlib itself - all face encoding work
+# is delegated to face_processor.py running on the Pi (where dlib is already
+# proven working via piwheels). Set this to your Pi's actual address.
+import os
+FACE_PROCESSOR_URL = os.environ.get("FACE_PROCESSOR_URL", "http://192.168.1.72:8095")
+
 app = FastAPI(title="Bus Pickup/Drop Backend (dev)")
 
 
@@ -376,161 +382,212 @@ def dashboard():
 <head>
   <title>School Bus - Central Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
+    :root {
+      --navy: #0f2540; --navy-light: #16345c; --accent: #2f6fed; --accent-light: #eaf1ff;
+      --green: #1fa971; --green-bg: #e8f9f1; --red: #e5484d; --red-bg: #fdecec;
+      --blue-bg: #eaf1ff; --blue-text: #2f6fed;
+      --ink: #0f172a; --muted: #64748b; --border: #e6eaf0; --bg: #f4f6fb; --card: #ffffff;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
-    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-    h1 { color: #1a3a52; margin-bottom: 30px; text-align: center; }
-    .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #ddd; }
-    .tab-btn { padding: 12px 24px; background: none; border: none; cursor: pointer; font-size: 16px; color: #666; border-bottom: 3px solid transparent; }
-    .tab-btn.active { color: #1a3a52; border-bottom-color: #1a3a52; }
-    .tab-content { display: none; }
-    .tab-content.active { display: block; }
-    
-    .form-group { margin-bottom: 20px; }
-    label { display: block; margin-bottom: 8px; font-weight: 600; color: #333; }
-    input[type=text], select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; }
-    
-    .camera-section { background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-    video { width: 100%; max-width: 500px; border: 2px solid #ddd; border-radius: 4px; margin-bottom: 15px; display: block; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--ink); }
+
+    .shell { display: flex; min-height: 100vh; }
+
+    .sidebar { width: 240px; background: var(--navy); color: #fff; flex-shrink: 0; padding: 24px 0;
+      display: flex; flex-direction: column; }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 24px 24px; font-weight: 800; font-size: 1.05rem;
+      border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 12px; }
+    .brand-badge { width: 34px; height: 34px; background: var(--accent); border-radius: 9px; display: flex;
+      align-items: center; justify-content: center; font-size: 1.1rem; }
+
+    .tab-btn { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 12px 24px;
+      background: none; border: none; color: rgba(255,255,255,0.65); font-size: 0.92rem; font-weight: 500;
+      cursor: pointer; border-left: 3px solid transparent; transition: all .15s; margin: 0; border-radius: 0; }
+    .tab-btn:hover { background: rgba(255,255,255,0.05); color: #fff; }
+    .tab-btn.active { background: rgba(47,111,237,0.15); color: #fff; border-left-color: var(--accent); }
+    .tab-icon { width: 18px; text-align: center; }
+
+    .main { flex: 1; padding: 32px 40px; max-width: 1100px; }
+    .page-title { font-size: 1.5rem; font-weight: 800; margin-bottom: 4px; }
+    .page-sub { color: var(--muted); font-size: 0.92rem; margin-bottom: 28px; }
+
+    .tab-content { display: none; } .tab-content.active { display: block; }
+
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 24px;
+      box-shadow: 0 1px 2px rgba(15,23,42,0.03); margin-bottom: 20px; }
+    .card h3 { font-size: 1rem; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 22px; }
+    .form-group label { display: block; margin-bottom: 6px; font-weight: 600; font-size: 0.82rem; color: var(--ink); }
+    input[type=text], select { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+      font-size: 0.92rem; font-family: inherit; background: #fbfcfe; transition: border-color .15s; }
+    input[type=text]:focus, select:focus { outline: none; border-color: var(--accent); background: #fff; }
+
+    video { width: 100%; max-width: 420px; border-radius: 10px; margin-bottom: 14px; display: block; background: #000; }
     canvas { display: none; }
-    
-    .photo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 15px 0; }
-    .photo-thumb { position: relative; aspect-ratio: 1; border-radius: 4px; overflow: hidden; border: 2px solid #e0e0e0; }
+
+    .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 10px; margin: 14px 0; max-width: 420px; }
+    .photo-thumb { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
     .photo-thumb img { width: 100%; height: 100%; object-fit: cover; }
-    .photo-thumb .remove { position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; font-size: 18px; }
-    
-    button { padding: 12px 24px; background: #1a3a52; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; margin-right: 10px; margin-bottom: 10px; }
-    button:hover { background: #0f2841; }
-    button:disabled { background: #ccc; cursor: not-allowed; }
-    .btn-secondary { background: #666; }
-    .btn-secondary:hover { background: #555; }
-    
-    .status { padding: 15px; border-radius: 4px; margin: 15px 0; }
-    .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-    .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-    .status.info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
-    
-    .device-list { background: #fff; padding: 20px; border-radius: 8px; }
-    .device-item { padding: 15px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
-    .device-item:last-child { border-bottom: none; }
-    .device-status { padding: 4px 12px; border-radius: 20px; font-size: 14px; font-weight: 600; }
-    .device-status.online { background: #d4edda; color: #155724; }
-    .device-status.offline { background: #f8d7da; color: #721c24; }
-    
-    .event-list { background: #fff; padding: 20px; border-radius: 8px; }
-    .event-item { padding: 15px; border-bottom: 1px solid #eee; }
-    .event-item:last-child { border-bottom: none; }
-    .event-header { display: flex; justify-content: space-between; margin-bottom: 5px; }
-    .event-type { font-weight: 600; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
-    .event-type.PICKED_UP { background: #d4edda; color: #155724; }
-    .event-type.DROPPED { background: #cfe2ff; color: #084298; }
-    .event-time { color: #666; font-size: 14px; }
-    
-    table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
-    th { background: #f5f5f5; font-weight: 600; color: #333; }
-    tr:hover { background: #fafafa; }
+    .photo-thumb .remove { position: absolute; top: 3px; right: 3px; background: rgba(0,0,0,0.6); color: white;
+      border: none; border-radius: 50%; width: 20px; height: 20px; cursor: pointer; font-size: 13px; line-height: 1; }
+
+    button { padding: 10px 20px; background: var(--navy); color: white; border: none; border-radius: 8px;
+      font-size: 0.88rem; font-weight: 600; cursor: pointer; margin-right: 8px; margin-bottom: 8px;
+      font-family: inherit; transition: background .15s, transform .1s; }
+    button:hover { background: var(--navy-light); }
+    button:active { transform: scale(0.98); }
+    button:disabled { background: #cbd3e0; cursor: not-allowed; }
+    button[type=submit] { background: var(--accent); }
+    button[type=submit]:hover { background: #2560d6; }
+    .btn-secondary { background: #fff; color: var(--ink); border: 1px solid var(--border) !important; }
+    .btn-secondary:hover { background: #f4f6fb; }
+
+    .status { padding: 12px 16px; border-radius: 8px; margin: 14px 0; font-size: 0.88rem; font-weight: 500; }
+    .status.success { background: var(--green-bg); color: #0d7a4f; }
+    .status.error { background: var(--red-bg); color: #b3272b; }
+    .status.info { background: var(--blue-bg); color: var(--blue-text); }
+
+    .device-item { padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; display: flex;
+      justify-content: space-between; align-items: center; margin-bottom: 10px; background: #fbfcfe; }
+    .device-item:last-child { margin-bottom: 0; }
+    .device-status { padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 700; letter-spacing: .02em; }
+    .device-status.online { background: var(--green-bg); color: #0d7a4f; }
+    .device-status.offline { background: var(--red-bg); color: #b3272b; }
+    .device-status.unknown { background: #f1f3f7; color: var(--muted); }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
+    .dot.online { background: #1fa971; } .dot.offline { background: #e5484d; } .dot.unknown { background: #94a3b8; }
+
+    .event-item { padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; background: #fbfcfe; }
+    .event-item:last-child { margin-bottom: 0; }
+    .event-header { display: flex; justify-content: space-between; margin-bottom: 6px; align-items: center; }
+    .event-type { font-weight: 700; padding: 3px 10px; border-radius: 6px; font-size: 0.72rem; letter-spacing: .02em; }
+    .event-type.PICKED_UP { background: var(--green-bg); color: #0d7a4f; }
+    .event-type.DROPPED { background: var(--blue-bg); color: var(--blue-text); }
+    .event-meta { font-size: 0.83rem; color: var(--muted); }
+    .event-time { color: var(--muted); font-size: 0.78rem; margin-top: 4px; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: #fbfcfe; font-weight: 700; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: .04em; }
+    tr:hover td { background: #fafbfd; }
+    code { background: #f1f3f7; padding: 3px 7px; border-radius: 5px; font-size: 0.82rem; }
+    .pill { background: var(--blue-bg); color: var(--blue-text); padding: 2px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+
+    .search-input { max-width: 320px; margin-bottom: 16px; }
+    .empty-state { padding: 32px; text-align: center; color: var(--muted); font-size: 0.9rem; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>🚌 School Bus Central Dashboard</h1>
-    
-    <div class="tabs">
-      <button class="tab-btn active" onclick="window.showTab('enroll')">Enroll Student</button>
-      <button class="tab-btn" onclick="window.showTab('students')">All Students</button>
-      <button class="tab-btn" onclick="window.showTab('devices')">Connected Devices</button>
-      <button class="tab-btn" onclick="window.showTab('events')">Live Events</button>
-    </div>
-    
-    <!-- ENROLLMENT TAB -->
-    <div id="enroll" class="tab-content active">
-      <form id="enrollForm" style="background: #fff; padding: 20px; border-radius: 8px;">
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
-          <div class="form-group">
-            <label>Child ID</label>
-            <input type="text" name="child_id" placeholder="e.g. child_001" required>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-badge">🚌</span> Bus Central</div>
+      <button class="tab-btn active" onclick="window.showTab('enroll')"><span class="tab-icon">➕</span> Enroll Student</button>
+      <button class="tab-btn" onclick="window.showTab('students')"><span class="tab-icon">🎓</span> All Students</button>
+      <button class="tab-btn" onclick="window.showTab('devices')"><span class="tab-icon">📡</span> Connected Devices</button>
+      <button class="tab-btn" onclick="window.showTab('events')"><span class="tab-icon">🕒</span> Live Events</button>
+    </aside>
+
+    <main class="main">
+      <!-- ENROLLMENT TAB -->
+      <div id="enroll" class="tab-content active">
+        <div class="page-title">Enroll a Student</div>
+        <div class="page-sub">Photos are processed centrally and reach every bus on their next sync.</div>
+
+        <form id="enrollForm">
+          <div class="card">
+            <h3>Student Details</h3>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Child ID</label>
+                <input type="text" name="child_id" placeholder="e.g. child_001" required>
+              </div>
+              <div class="form-group">
+                <label>Full Name</label>
+                <input type="text" name="name" placeholder="e.g. John Doe" required>
+              </div>
+              <div class="form-group">
+                <label>Assigned Bus ID</label>
+                <input type="text" name="bus_id" placeholder="e.g. bus_14" required>
+              </div>
+              <div class="form-group">
+                <label>Pickup Stop ID</label>
+                <input type="text" name="pickup_stop_id" placeholder="e.g. stop_1" required>
+              </div>
+              <div class="form-group">
+                <label>Drop Stop ID</label>
+                <input type="text" name="drop_stop_id" placeholder="e.g. stop_2" required>
+              </div>
+              <div class="form-group">
+                <label>Twin/Sibling Group (optional)</label>
+                <input type="text" name="twin_group" placeholder="Leave blank if none">
+              </div>
+            </div>
           </div>
-          <div class="form-group">
-            <label>Full Name</label>
-            <input type="text" name="name" placeholder="e.g. John Doe" required>
+
+          <div class="card">
+            <h3>📷 Capture Photos <span class="pill">Need 3-5</span></h3>
+            <video id="camera" playsinline></video>
+            <canvas id="canvas"></canvas>
+            <div>
+              <button type="button" onclick="window.startCamera()">Start Camera</button>
+              <button type="button" onclick="window.capturePhoto()" id="captureBtn" class="btn-secondary" disabled>Capture Photo</button>
+              <button type="button" onclick="window.stopCamera()" class="btn-secondary">Stop Camera</button>
+            </div>
+            <div class="photo-grid" id="photoGrid"></div>
+            
+            <hr style="margin: 20px 0; border: none; border-top: 1px solid var(--border);">
+            <h3>Or Upload Files Instead</h3>
+            <div class="form-group">
+              <input type="file" id="photoUpload" accept="image/*" multiple style="padding: 8px;">
+            </div>
+            <button type="button" onclick="window.processUploadedFiles()">Process Uploaded Photos</button>
           </div>
-          <div class="form-group">
-            <label>Assigned Bus ID</label>
-            <input type="text" name="bus_id" placeholder="e.g. bus_14" required>
-          </div>
-          <div class="form-group">
-            <label>Pickup Stop ID</label>
-            <input type="text" name="pickup_stop_id" placeholder="e.g. stop_1" required>
-          </div>
-          <div class="form-group">
-            <label>Drop Stop ID</label>
-            <input type="text" name="drop_stop_id" placeholder="e.g. stop_2" required>
-          </div>
-          <div class="form-group">
-            <label>Twin/Sibling Group (optional)</label>
-            <input type="text" name="twin_group" placeholder="Leave blank if none">
-          </div>
+
+          <div id="enrollStatus"></div>
+          <button type="submit">Enroll Student</button>
+          <button type="button" onclick="window.clearPhotos()" class="btn-secondary">Clear Photos</button>
+        </form>
+      </div>
+
+      <!-- STUDENTS TAB -->
+      <div id="students" class="tab-content">
+        <div class="page-title">All Students</div>
+        <div class="page-sub">Every enrolled student across the fleet.</div>
+        <div class="card">
+          <input type="text" id="searchBox" class="search-input" placeholder="Search by name or ID...">
+          <table>
+            <thead>
+              <tr><th>ID</th><th>Name</th><th>Bus</th><th>Pickup</th><th>Drop</th><th style="text-align:center;">Photos</th></tr>
+            </thead>
+            <tbody id="studentsList">
+              <tr><td colspan="6" class="empty-state">Loading...</td></tr>
+            </tbody>
+          </table>
         </div>
-        
-        <div class="camera-section">
-          <h3>📷 Capture Photos (Need 3-5)</h3>
-          <video id="camera" playsinline></video>
-          <canvas id="canvas"></canvas>
-          <div>
-            <button type="button" onclick="window.startCamera()">Start Camera</button>
-            <button type="button" onclick="window.capturePhoto()" id="captureBtn" disabled>Capture Photo</button>
-            <button type="button" onclick="window.stopCamera()" class="btn-secondary">Stop Camera</button>
-          </div>
-          <div class="photo-grid" id="photoGrid"></div>
-        </div>
-        
-        <div id="enrollStatus"></div>
-        
-        <button type="submit">Enroll Student</button>
-        <button type="button" onclick="window.clearPhotos()" class="btn-secondary">Clear Photos</button>
-      </form>
-    </div>
-    
-    <!-- STUDENTS TAB -->
-    <div id="students" class="tab-content">
-      <div style="background: #fff; padding: 20px; border-radius: 8px;">
-        <input type="text" id="searchBox" placeholder="Search by name or ID..." style="margin-bottom: 15px; width: 300px;">
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Name</th>
-              <th>Bus</th>
-              <th>Pickup</th>
-              <th>Drop</th>
-              <th style="text-align: center;">Photos</th>
-            </tr>
-          </thead>
-          <tbody id="studentsList">
-            <tr><td colspan="6" style="padding: 20px; text-align: center; color: #999;">Loading...</td></tr>
-          </tbody>
-        </table>
+        <button onclick="window.loadStudents()" class="btn-secondary">Refresh</button>
       </div>
-      <button onclick="window.loadStudents()" style="margin-top: 20px;">Refresh</button>
-    </div>
-    
-    <!-- DEVICES TAB -->
-    <div id="devices" class="tab-content">
-      <div class="device-list" id="devicesList">
-        <p>Loading devices...</p>
+
+      <!-- DEVICES TAB -->
+      <div id="devices" class="tab-content">
+        <div class="page-title">Connected Devices</div>
+        <div class="page-sub">Each bus's edge device, live.</div>
+        <div class="card" id="devicesList"><p class="empty-state">Loading devices...</p></div>
+        <button onclick="window.loadDevices()" class="btn-secondary">Refresh</button>
       </div>
-      <button onclick="window.loadDevices()" style="margin-top: 20px;">Refresh</button>
-    </div>
-    
-    <!-- EVENTS TAB -->
-    <div id="events" class="tab-content">
-      <div class="event-list" id="eventsList">
-        <p>Loading events...</p>
+
+      <!-- EVENTS TAB -->
+      <div id="events" class="tab-content">
+        <div class="page-title">Live Events</div>
+        <div class="page-sub">Pickup and drop confirmations as they happen.</div>
+        <div class="card" id="eventsList"><p class="empty-state">Loading events...</p></div>
+        <button onclick="window.loadEvents()" class="btn-secondary">Refresh</button>
       </div>
-      <button onclick="window.loadEvents()" style="margin-top: 20px;">Refresh</button>
-    </div>
+    </main>
   </div>
 
   <script>
@@ -589,6 +646,34 @@ def dashboard():
     window.clearPhotos = function() {
       photos = [];
       document.getElementById('photoGrid').innerHTML = '';
+    };
+    
+    window.processUploadedFiles = function() {
+      const fileInput = document.getElementById('photoUpload');
+      if (fileInput.files.length === 0) {
+        alert('Please select files first');
+        return;
+      }
+      for (let file of fileInput.files) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const b64 = e.target.result.split(',')[1];
+          photos.push(b64);
+          const div = document.createElement('div');
+          div.className = 'photo-thumb';
+          const img = document.createElement('img');
+          img.src = e.target.result;
+          div.appendChild(img);
+          const btn = document.createElement('button');
+          btn.className = 'remove';
+          btn.type = 'button';
+          btn.textContent = '×';
+          btn.onclick = (evt) => { evt.preventDefault(); photos.splice(photos.indexOf(b64), 1); div.remove(); };
+          div.appendChild(btn);
+          document.getElementById('photoGrid').appendChild(div);
+        };
+        reader.readAsDataURL(file);
+      }
     };
     
     window.showTab = function(name) {
@@ -728,46 +813,36 @@ def dashboard():
 @app.post("/api/enroll/centralized")
 def centralized_enroll(data: CentralEnrollmentIn):
     """
-    Centralized enrollment: browser sends base64 photos to backend.
-    Backend processes them, generates encodings, stores student, syncs to all devices.
+    Centralized enrollment: browser sends base64 photos to the backend, which
+    forwards them to face_processor.py running on the Pi (NOT processed here -
+    the backend never imports face_recognition/dlib, avoiding the Windows dlib
+    install problem entirely). The Pi does quality checks + encoding and returns
+    the result; the backend just stores it and every device's next sync picks it up.
     """
     if not data.photos:
         raise HTTPException(400, "No photos provided")
-    
-    good_encodings = []
-    rejections = []
-    
-    for i, b64_photo in enumerate(data.photos):
-        # Decode base64 to image
-        image = base64_to_cv2(b64_photo)
-        if image is None:
-            rejections.append(f"Photo {i+1}: Invalid image data")
-            continue
-        
-        # Quality check
-        ok, msg = quality_check_image(image)
-        if not ok:
-            rejections.append(f"Photo {i+1}: {msg}")
-            continue
-        
-        # Generate encoding
-        encoding, err = get_encoding_from_image(image)
-        if err:
-            rejections.append(f"Photo {i+1}: {err}")
-            continue
-        
-        good_encodings.append(encoding)
-    
+
+    try:
+        resp = requests.post(f"{FACE_PROCESSOR_URL}/encode", json={"photos": data.photos}, timeout=30)
+        resp.raise_for_status()
+        result = resp.json()
+    except Exception as e:
+        return JSONResponse(
+            status_code=502,
+            content={"status": "error",
+                     "message": f"Could not reach face processor at {FACE_PROCESSOR_URL} "
+                                f"(is face_processor.py running on the Pi?): {e}"},
+        )
+
+    good_encodings = result.get("encodings", [])
+    rejections = result.get("rejections", [])
+
     if not good_encodings:
         return JSONResponse(
             status_code=400,
-            content={
-                "status": "error",
-                "message": f"No usable photos. Rejections: {rejections}"
-            }
+            content={"status": "error", "message": f"No usable photos. Rejections: {rejections}"},
         )
-    
-    # Store student in database
+
     conn = get_conn()
     conn.execute(
         """INSERT INTO students (child_id, name, encodings, assigned_bus_id, pickup_stop_id, drop_stop_id, twin_group)
@@ -782,11 +857,11 @@ def centralized_enroll(data: CentralEnrollmentIn):
     )
     conn.commit()
     conn.close()
-    
+
     summary = f"Enrolled '{data.name}' with {len(good_encodings)} encodings from {len(data.photos)} photos."
     if rejections:
         summary += f"\n\nRejected: {', '.join(rejections)}"
-    
+
     return {
         "status": "success",
         "child_id": data.child_id,
