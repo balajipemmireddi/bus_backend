@@ -884,26 +884,40 @@ class StudentUpdate(BaseModel):
 @app.get("/api/students")
 def list_students():
     """List all students with summary info."""
-    conn = get_conn()
-    rows = conn.execute("SELECT * FROM students ORDER BY name").fetchall()
-    conn.close()
-    
-    students = []
-    for r in rows:
-        students.append({
-            "child_id": r["child_id"],
-            "name": r["name"],
-            "assigned_bus_id": r["assigned_bus_id"],
-            "pickup_stop_id": r["pickup_stop_id"],
-            "drop_stop_id": r["drop_stop_id"],
-            "twin_group": r["twin_group"],
-            "num_encodings": len(json.loads(r["encodings"])),
-        })
-    
-    return {
-        "total": len(students),
-        "students": students
-    }
+    try:
+        conn = get_conn()
+        rows = conn.execute("SELECT * FROM students ORDER BY name").fetchall()
+        conn.close()
+        
+        students = []
+        for r in rows:
+            try:
+                encodings_list = json.loads(r["encodings"])
+                num_encodings = len(encodings_list) if isinstance(encodings_list, list) else 1
+            except:
+                num_encodings = 0
+            
+            students.append({
+                "child_id": r["child_id"],
+                "name": r["name"],
+                "assigned_bus_id": r["assigned_bus_id"],
+                "pickup_stop_id": r["pickup_stop_id"],
+                "drop_stop_id": r["drop_stop_id"],
+                "twin_group": r["twin_group"],
+                "num_encodings": num_encodings,
+            })
+        
+        return {
+            "total": len(students),
+            "students": students
+        }
+    except Exception as e:
+        print(f"[ERROR] list_students failed: {e}")
+        return {
+            "total": 0,
+            "students": [],
+            "error": str(e)
+        }
 
 
 @app.get("/api/students/{child_id}")
@@ -1153,12 +1167,23 @@ def management_dashboard():
             async function loadStudents() {
                 try {
                     const res = await fetch('/api/students');
+                    if (!res.ok) {
+                        throw new Error(`API returned ${res.status}`);
+                    }
                     const data = await res.json();
+                    
+                    // Handle case where data structure is wrong
+                    if (!data || typeof data.total === 'undefined' || !Array.isArray(data.students)) {
+                        console.error('Unexpected API response:', data);
+                        document.getElementById('students-body').innerHTML = 
+                            '<tr><td colspan="8" class="empty">Error loading students. Check console.</td></tr>';
+                        return;
+                    }
                     
                     document.getElementById('total').textContent = data.total;
                     
                     const body = document.getElementById('students-body');
-                    if (data.students.length === 0) {
+                    if (!data.students || data.students.length === 0) {
                         body.innerHTML = '<tr><td colspan="8" class="empty">No students enrolled yet. Use the enrollment dashboard to add students.</td></tr>';
                         return;
                     }
@@ -1181,8 +1206,9 @@ def management_dashboard():
                         </tr>
                     `).join('');
                 } catch (e) {
-                    console.error('Error:', e);
-                    alert('Failed to load students');
+                    console.error('Error loading students:', e);
+                    document.getElementById('students-body').innerHTML = 
+                        '<tr><td colspan="8" class="empty">Failed to load students: ' + e.message + '</td></tr>';
                 }
             }
 
