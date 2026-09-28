@@ -349,26 +349,6 @@ def get_devices():
     return devices
 
 
-@app.get("/api/students")
-def get_all_students():
-    """Get all enrolled students."""
-    conn = get_conn()
-    rows = conn.execute("SELECT * FROM students ORDER BY name").fetchall()
-    conn.close()
-    students = []
-    for r in rows:
-        students.append({
-            "child_id": r["child_id"],
-            "name": r["name"],
-            "assigned_bus_id": r["assigned_bus_id"],
-            "pickup_stop_id": r["pickup_stop_id"],
-            "drop_stop_id": r["drop_stop_id"],
-            "twin_group": r["twin_group"],
-            "encoding_count": len(json.loads(r["encodings"]))
-        })
-    return students
-
-
 @app.get("/")
 def root():
     return {"status": "Bus backend running", "docs": "/docs"}
@@ -1007,6 +987,28 @@ def delete_student(child_id: str):
     conn.close()
     
     return {"status": "deleted", "child_id": child_id}
+
+
+@app.delete("/api/students")
+def delete_all_students(confirm: str = None):
+    """DELETE ALL STUDENTS - DANGEROUS! Requires confirm=yes parameter."""
+    if confirm != "yes":
+        raise HTTPException(
+            status_code=400,
+            detail="To delete ALL students, pass ?confirm=yes parameter"
+        )
+    
+    conn = get_conn()
+    conn.execute("DELETE FROM students")
+    conn.commit()
+    count = conn.total_changes
+    conn.close()
+    
+    return {
+        "status": "deleted_all",
+        "students_deleted": count,
+        "message": "All students deleted. Pi devices will have empty roster on next sync (30s)."
+    }
 
 
 @app.get("/api/export")
