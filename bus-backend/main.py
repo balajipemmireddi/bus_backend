@@ -38,9 +38,14 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # The backend NEVER imports face_recognition/dlib itself - all face encoding work
 # is delegated to face_processor.py running on the Pi (where dlib is already
-# proven working via piwheels). Set this to your Pi's actual address.
+# proven working via piwheels). 
+# 
+# Set via environment variable: export FACE_PROCESSOR_URL=http://192.168.X.X:8095
+# Or edit the default below to match your Pi's actual IP
 import os
-FACE_PROCESSOR_URL = os.environ.get("FACE_PROCESSOR_URL", "http://192.168.29.220:8095")
+FACE_PROCESSOR_URL = os.environ.get("FACE_PROCESSOR_URL", "http://192.168.1.X:8095")  # ← UPDATE: your Pi IP
+
+print(f"[INFO] Face processor URL: {FACE_PROCESSOR_URL}")
 
 app = FastAPI(title="Bus Pickup/Drop Backend (dev)")
 
