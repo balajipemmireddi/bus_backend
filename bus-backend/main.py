@@ -868,3 +868,416 @@ def centralized_enroll(data: CentralEnrollmentIn):
         "encodings_count": len(good_encodings),
         "message": summary
     }
+
+
+# ---- Student Management CRUD API (centralized on backend) ----
+
+class StudentUpdate(BaseModel):
+    """Update student info (NOT encodings - those stay)."""
+    name: str | None = None
+    assigned_bus_id: str | None = None
+    pickup_stop_id: str | None = None
+    drop_stop_id: str | None = None
+    twin_group: str | None = None
+
+
+@app.get("/api/students")
+def list_students():
+    """List all students with summary info."""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM students ORDER BY name").fetchall()
+    conn.close()
+    
+    students = []
+    for r in rows:
+        students.append({
+            "child_id": r["child_id"],
+            "name": r["name"],
+            "assigned_bus_id": r["assigned_bus_id"],
+            "pickup_stop_id": r["pickup_stop_id"],
+            "drop_stop_id": r["drop_stop_id"],
+            "twin_group": r["twin_group"],
+            "num_encodings": len(json.loads(r["encodings"])),
+        })
+    
+    return {
+        "total": len(students),
+        "students": students
+    }
+
+
+@app.get("/api/students/{child_id}")
+def get_student_detail(child_id: str):
+    """Get full details for one student."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM students WHERE child_id = ?", (child_id,)).fetchone()
+    conn.close()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Get current status from events
+    conn = get_conn()
+    last_event = conn.execute(
+        "SELECT event_type FROM events WHERE child_id = ? ORDER BY timestamp DESC LIMIT 1",
+        (child_id,)
+    ).fetchone()
+    conn.close()
+    
+    last_status = last_event["event_type"] if last_event else "NOT_PICKED_UP"
+    
+    return {
+        "child_id": row["child_id"],
+        "name": row["name"],
+        "assigned_bus_id": row["assigned_bus_id"],
+        "pickup_stop_id": row["pickup_stop_id"],
+        "drop_stop_id": row["drop_stop_id"],
+        "twin_group": row["twin_group"],
+        "num_encodings": len(json.loads(row["encodings"])),
+        "last_status": last_status,
+    }
+
+
+@app.post("/api/students/{child_id}")
+def update_student(child_id: str, data: StudentUpdate):
+    """Update student info (name, stops, bus - NOT encodings)."""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM students WHERE child_id = ?", (child_id,)).fetchone()
+    
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Keep existing encodings, update only specified fields
+    updates = {}
+    if data.name is not None:
+        updates["name"] = data.name
+    if data.assigned_bus_id is not None:
+        updates["assigned_bus_id"] = data.assigned_bus_id
+    if data.pickup_stop_id is not None:
+        updates["pickup_stop_id"] = data.pickup_stop_id
+    if data.drop_stop_id is not None:
+        updates["drop_stop_id"] = data.drop_stop_id
+    if data.twin_group is not None:
+        updates["twin_group"] = data.twin_group
+    
+    if not updates:
+        conn.close()
+        return {"status": "no_changes"}
+    
+    # Build UPDATE query dynamically
+    set_clauses = ", ".join([f"{k}=?" for k in updates.keys()])
+    values = list(updates.values()) + [child_id]
+    
+    conn.execute(f"UPDATE students SET {set_clauses} WHERE child_id = ?", values)
+    conn.commit()
+    conn.close()
+    
+    return {"status": "updated", "child_id": child_id, "fields": list(updates.keys())}
+
+
+@app.delete("/api/students/{child_id}")
+def delete_student(child_id: str):
+    """Delete a student from the roster."""
+    conn = get_conn()
+    
+    # Check if student exists
+    row = conn.execute("SELECT * FROM students WHERE child_id = ?", (child_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Delete student (events remain for audit trail)
+    conn.execute("DELETE FROM students WHERE child_id = ?", (child_id,))
+    conn.commit()
+    conn.close()
+    
+    return {"status": "deleted", "child_id": child_id}
+
+
+@app.get("/api/export")
+def export_students():
+    """Export all students as JSON (backup/transfer)."""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM students ORDER BY name").fetchall()
+    conn.close()
+    
+    students = []
+    for r in rows:
+        students.append({
+            "child_id": r["child_id"],
+            "name": r["name"],
+            "encodings": json.loads(r["encodings"]),
+            "assigned_bus_id": r["assigned_bus_id"],
+            "pickup_stop_id": r["pickup_stop_id"],
+            "drop_stop_id": r["drop_stop_id"],
+            "twin_group": r["twin_group"],
+        })
+    
+    return {
+        "exported_at": datetime.datetime.now().isoformat(),
+        "total_students": len(students),
+        "students": students
+    }
+
+
+@app.get("/api/students/health/ping")
+def students_health():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+
+# ---- Student Management Dashboard (Web UI on Backend) ----
+
+@app.get("/management")
+def management_dashboard():
+    """Student management dashboard - view, edit, delete students."""
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Student Management - Bus System</title>
+        <style>
+            * { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+            body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); margin: 0; padding: 20px; min-height: 100vh; }
+            .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+            h1 { color: #333; margin-top: 0; border-bottom: 3px solid #667eea; padding-bottom: 10px; }
+            .controls { margin: 20px 0; display: flex; gap: 10px; flex-wrap: wrap; }
+            button { padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: 600; transition: all 0.3s; }
+            button.primary { background: #667eea; color: white; }
+            button.primary:hover { background: #5568d3; transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102,126,234,0.4); }
+            button.danger { background: #ff6b6b; color: white; }
+            button.danger:hover { background: #ff5252; }
+            button.success { background: #51cf66; color: white; }
+            button.success:hover { background: #40c057; }
+            .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
+            .stat { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; }
+            .stat h3 { margin: 0 0 5px 0; opacity: 0.9; font-size: 14px; }
+            .stat .value { font-size: 28px; font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th { background: #667eea; color: white; padding: 15px; text-align: left; font-weight: 600; }
+            td { padding: 12px 15px; border-bottom: 1px solid #eee; }
+            tr:hover { background: #f9f9f9; }
+            .actions { display: flex; gap: 5px; }
+            .actions button { padding: 6px 12px; font-size: 12px; }
+            .empty { text-align: center; padding: 40px; color: #999; }
+            .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+            .modal.show { display: flex; }
+            .modal-content { background: white; padding: 30px; border-radius: 8px; width: 90%; max-width: 500px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
+            .modal h2 { margin-top: 0; color: #333; }
+            .form-group { margin-bottom: 15px; }
+            .form-group label { display: block; margin-bottom: 5px; font-weight: 600; color: #555; }
+            .form-group input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+            .form-group input:focus { outline: none; border-color: #667eea; box-shadow: 0 0 0 3px rgba(102,126,234,0.1); }
+            .modal-buttons { display: flex; gap: 10px; margin-top: 20px; }
+            .badge { display: inline-block; padding: 4px 8px; background: #e3f2fd; color: #1976d2; border-radius: 3px; font-size: 12px; font-weight: 600; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>👥 Student Management Dashboard</h1>
+            
+            <div class="stats">
+                <div class="stat">
+                    <h3>Total Students</h3>
+                    <div class="value" id="total">0</div>
+                </div>
+                <div class="stat">
+                    <h3>Enrolled Today</h3>
+                    <div class="value" id="today">0</div>
+                </div>
+                <div class="stat">
+                    <h3>System Status</h3>
+                    <div class="value" id="status" style="font-size: 14px; color: #51cf66;">🟢 LIVE</div>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <button class="success" onclick="exportStudents()">📥 Export All</button>
+                <button class="primary" onclick="reloadStudents()">🔄 Refresh</button>
+            </div>
+            
+            <table id="students-table">
+                <thead>
+                    <tr>
+                        <th>Student ID</th>
+                        <th>Name</th>
+                        <th>Bus</th>
+                        <th>Pickup Stop</th>
+                        <th>Drop Stop</th>
+                        <th>Photos</th>
+                        <th>Last Event</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="students-body">
+                    <tr><td colspan="8" class="empty">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Edit Modal -->
+        <div class="modal" id="edit-modal">
+            <div class="modal-content">
+                <h2>Edit Student</h2>
+                <div class="form-group">
+                    <label>Student ID</label>
+                    <input type="text" id="edit-id" disabled>
+                </div>
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="edit-name">
+                </div>
+                <div class="form-group">
+                    <label>Bus ID</label>
+                    <input type="text" id="edit-bus">
+                </div>
+                <div class="form-group">
+                    <label>Pickup Stop</label>
+                    <input type="text" id="edit-pickup">
+                </div>
+                <div class="form-group">
+                    <label>Drop Stop</label>
+                    <input type="text" id="edit-drop">
+                </div>
+                <div class="modal-buttons">
+                    <button class="primary" onclick="saveChanges()">Save</button>
+                    <button onclick="closeModal()" style="background: #e0e0e0;">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            let currentEditId = null;
+
+            async function loadStudents() {
+                try {
+                    const res = await fetch('/api/students');
+                    const data = await res.json();
+                    
+                    document.getElementById('total').textContent = data.total;
+                    
+                    const body = document.getElementById('students-body');
+                    if (data.students.length === 0) {
+                        body.innerHTML = '<tr><td colspan="8" class="empty">No students enrolled yet. Use the enrollment dashboard to add students.</td></tr>';
+                        return;
+                    }
+                    
+                    body.innerHTML = data.students.map(s => `
+                        <tr>
+                            <td><code>${s.child_id}</code></td>
+                            <td><strong>${s.name}</strong></td>
+                            <td>${s.assigned_bus_id || '—'}</td>
+                            <td>${s.pickup_stop_id || '—'}</td>
+                            <td>${s.drop_stop_id || '—'}</td>
+                            <td><span class="badge">${s.num_encodings} photos</span></td>
+                            <td>—</td>
+                            <td>
+                                <div class="actions">
+                                    <button class="primary" onclick="editStudent('${s.child_id}')">Edit</button>
+                                    <button class="danger" onclick="deleteStudent('${s.child_id}')">Delete</button>
+                                </div>
+                            </td>
+                        </tr>
+                    `).join('');
+                } catch (e) {
+                    console.error('Error:', e);
+                    alert('Failed to load students');
+                }
+            }
+
+            async function editStudent(child_id) {
+                try {
+                    const res = await fetch(`/api/students/${child_id}`);
+                    const s = await res.json();
+                    
+                    currentEditId = child_id;
+                    document.getElementById('edit-id').value = s.child_id;
+                    document.getElementById('edit-name').value = s.name;
+                    document.getElementById('edit-bus').value = s.assigned_bus_id || '';
+                    document.getElementById('edit-pickup').value = s.pickup_stop_id || '';
+                    document.getElementById('edit-drop').value = s.drop_stop_id || '';
+                    
+                    document.getElementById('edit-modal').classList.add('show');
+                } catch (e) {
+                    console.error('Error:', e);
+                    alert('Failed to load student');
+                }
+            }
+
+            async function saveChanges() {
+                const data = {
+                    name: document.getElementById('edit-name').value,
+                    assigned_bus_id: document.getElementById('edit-bus').value,
+                    pickup_stop_id: document.getElementById('edit-pickup').value,
+                    drop_stop_id: document.getElementById('edit-drop').value,
+                };
+                
+                try {
+                    const res = await fetch(`/api/students/${currentEditId}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data)
+                    });
+                    
+                    if (res.ok) {
+                        alert('✓ Student updated');
+                        closeModal();
+                        loadStudents();
+                    } else {
+                        alert('Failed to update student');
+                    }
+                } catch (e) {
+                    console.error('Error:', e);
+                    alert('Error updating student');
+                }
+            }
+
+            async function deleteStudent(child_id) {
+                if (!confirm(`Are you sure? Delete "${child_id}"? This cannot be undone.`)) return;
+                
+                try {
+                    const res = await fetch(`/api/students/${child_id}`, { method: 'DELETE' });
+                    if (res.ok) {
+                        alert('✓ Student deleted');
+                        loadStudents();
+                    } else {
+                        alert('Failed to delete student');
+                    }
+                } catch (e) {
+                    console.error('Error:', e);
+                    alert('Error deleting student');
+                }
+            }
+
+            async function exportStudents() {
+                try {
+                    const res = await fetch('/api/export');
+                    const data = await res.json();
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `students_${new Date().toISOString().split('T')[0]}.json`;
+                    a.click();
+                } catch (e) {
+                    console.error('Error:', e);
+                    alert('Error exporting data');
+                }
+            }
+
+            function closeModal() {
+                document.getElementById('edit-modal').classList.remove('show');
+            }
+
+            function reloadStudents() {
+                loadStudents();
+            }
+
+            // Auto-load
+            loadStudents();
+            setInterval(loadStudents, 10000); // Refresh every 10 seconds
+        </script>
+    </body>
+    </html>
+    """)
