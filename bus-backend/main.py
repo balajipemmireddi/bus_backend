@@ -151,6 +151,7 @@ class CentralEnrollmentIn(BaseModel):
     drop_stop_id: str
     twin_group: str | None = None
     photos: list[str]  # base64 encoded photos
+    force_overwrite: bool = False  # must be explicitly true to overwrite an existing, different child
 
 
 # Helper: Decode base64 image to OpenCV format
@@ -209,6 +210,15 @@ def get_encoding_from_image(image):
 @app.post("/api/enroll")
 def enroll(student: StudentIn):
     conn = get_conn()
+    existing = conn.execute("SELECT name FROM students WHERE child_id=?", (student.child_id,)).fetchone()
+    if existing and existing["name"] != student.name:
+        conn.close()
+        raise HTTPException(
+            409,
+            f"child_id '{student.child_id}' already belongs to '{existing['name']}'. "
+            f"Enrolling '{student.name}' under this ID would overwrite them. "
+            f"Use a different child_id, or explicitly confirm the overwrite."
+        )
     conn.execute(
         """INSERT INTO students (child_id, name, encodings, assigned_bus_id, pickup_stop_id, drop_stop_id, twin_group)
            VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -569,7 +579,16 @@ def dashboard():
       <div id="events" class="tab-content">
         <div class="page-title">Live Events</div>
         <div class="page-sub">Pickup and drop confirmations as they happen.</div>
-        <div class="card" id="eventsList"><p class="empty-state">Loading events...</p></div>
+        <div class="card">
+          <table>
+            <thead>
+              <tr><th>Time</th><th>Student</th><th>Bus</th><th>Event</th><th>Confidence</th></tr>
+            </thead>
+            <tbody id="eventsList">
+              <tr><td colspan="5" class="empty-state">Loading events...</td></tr>
+            </tbody>
+          </table>
+        </div>
         <button onclick="window.loadEvents()" class="btn-secondary">Refresh</button>
       </div>
     </main>
@@ -713,24 +732,69 @@ def dashboard():
     };
     
     window.loadEvents = async function() {
+      const tbody = document.getElementById('eventsList');
       try {
-        const resp = await fetch('/api/live');
-        const events = await resp.json();
-        const html = events.slice(0, 20).map(e => `
-          <div class="event-item">
-            <div class="event-header">
-              <div><strong>${e.child_id}</strong> <span class="event-type ${e.event_type}">${e.event_type}</span></div>
-            </div>
-            <div style="font-size: 14px; color: #666;">Bus: ${e.bus_id} | Confidence: ${e.confidence ? e.confidence.toFixed(3) : 'N/A'}</div>
-            <div class="event-time">${new Date(e.timestamp).toLocaleString()}</div>
-          </div>
-        `).join('');
-        document.getElementById('eventsList').innerHTML = html || '<p>No events</p>';
-      } catch (e) {
-        document.getElementById('eventsList').innerHTML = '<p style="color:red;">Error: ' + e.message + '</p>';
+        const [eventsResp, studentsResp] = await Promise.all([
+          fetch('/api/live'), fetch('/api/students')
+        ]);
+        const events = await eventsResp.json();
+        const students = await studentsResp.json();
+        const nameById = {};
+        students.forEach(s => { nameById[s.child_id] = s.name; });
+
+        if (!events.length) {
+          tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No events yet</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = events.slice(0, 50).map(e => {
+          const name = nameById[e.child_id] || e.child_id;
+          const conf = (e.confidence !== null && e.confidence !== undefined) ? e.confidence.toFixed(3) : 'N/A';
+          const time = new Date(e.timestamp).toLocaleString();
+          return `<tr>
+            <td>${time}</td>
+            <td>${name}</td>
+            <td><code>${e.bus_id}</code></td>
+            <td><span class="event-type ${e.event_type}">${e.event_type}</span></td>
+            <td>${conf}</td>
+          </tr>`;
+        }).join('');
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-state" style="color:var(--red);">Error: ${err.message}</td></tr>`;
       }
     };
     
+    async function submitEnrollment(payload, statusEl, formEl) {
+      const resp = await fetch('/api/enroll/centralized', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const data = await resp.json();
+
+      if (resp.status === 409 && data.collision) {
+        const confirmed = confirm(
+          `child_id "${payload.child_id}" already belongs to "${data.existing_name}".\n\n` +
+          `Enrolling "${payload.name}" here will OVERWRITE ${data.existing_name}'s face data ` +
+          `and they will stop being recognized.\n\nAre you sure you want to overwrite it?`
+        );
+        if (!confirmed) {
+          statusEl.className = 'status error';
+          statusEl.textContent = 'Cancelled - choose a different child_id instead.';
+          return;
+        }
+        payload.force_overwrite = true;
+        return submitEnrollment(payload, statusEl, formEl); // retry once, now explicitly confirmed
+      }
+
+      if (resp.ok) {
+        statusEl.className = 'status success';
+        statusEl.textContent = data.message;
+        window.clearPhotos();
+        formEl.reset();
+        window.loadStudents();
+      } else {
+        statusEl.className = 'status error';
+        statusEl.textContent = 'Error: ' + data.message;
+      }
+    }
+
     document.getElementById('enrollForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const statusEl = document.getElementById('enrollStatus');
@@ -747,23 +811,13 @@ def dashboard():
         pickup_stop_id: formData.get('pickup_stop_id'),
         drop_stop_id: formData.get('drop_stop_id'),
         twin_group: formData.get('twin_group') || null,
-        photos: photos
+        photos: photos,
+        force_overwrite: false
       };
       statusEl.className = 'status info';
       statusEl.textContent = 'Processing...';
       try {
-        const resp = await fetch('/api/enroll/centralized', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        const data = await resp.json();
-        if (resp.ok) {
-          statusEl.className = 'status success';
-          statusEl.textContent = data.message;
-          window.clearPhotos();
-          e.target.reset();
-          window.loadStudents();
-        } else {
-          statusEl.className = 'status error';
-          statusEl.textContent = 'Error: ' + data.message;
-        }
+        await submitEnrollment(payload, statusEl, e.target);
       } catch (err) {
         statusEl.className = 'status error';
         statusEl.textContent = 'Error: ' + err.message;
@@ -806,6 +860,23 @@ def centralized_enroll(data: CentralEnrollmentIn):
     """
     if not data.photos:
         raise HTTPException(400, "No photos provided")
+
+    conn = get_conn()
+    existing = conn.execute("SELECT name FROM students WHERE child_id=?", (data.child_id,)).fetchone()
+    conn.close()
+    if existing and existing["name"] != data.name and not data.force_overwrite:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "status": "error",
+                "message": f"child_id '{data.child_id}' already belongs to '{existing['name']}'. "
+                           f"Enrolling '{data.name}' under this ID would silently overwrite their "
+                           f"face data. Pick a different child_id for this student, or confirm the "
+                           f"overwrite if this really is meant to replace that record.",
+                "collision": True,
+                "existing_name": existing["name"],
+            },
+        )
 
     try:
         resp = requests.post(f"{FACE_PROCESSOR_URL}/encode", json={"photos": data.photos}, timeout=30)
