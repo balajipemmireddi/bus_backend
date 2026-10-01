@@ -32,6 +32,11 @@ import base64
 import io
 import numpy as np
 import cv2
+import os
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
 
 DB_PATH = Path(__file__).parent / "data" / "backend.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -40,10 +45,8 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 # is delegated to face_processor.py running on the Pi (where dlib is already
 # proven working via piwheels). 
 # 
-# Set via environment variable: export FACE_PROCESSOR_URL=http://192.168.X.X:8095
-# Or edit the default below to match your Pi's actual IP
-import os
-FACE_PROCESSOR_URL = os.environ.get("FACE_PROCESSOR_URL", "http://192.168.1.X:8095")  # ← UPDATE: your Pi IP
+# Set via .env file or environment variable: export FACE_PROCESSOR_URL=http://192.168.X.X:8095
+FACE_PROCESSOR_URL = os.environ.get("FACE_PROCESSOR_URL", "http://192.168.1.85:8095")
 
 print(f"[INFO] Face processor URL: {FACE_PROCESSOR_URL}")
 

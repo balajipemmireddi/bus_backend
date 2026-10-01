@@ -3,3 +3,4 @@ uvicorn
 requests
 opencv-python
 numpy
+python-dotenv>=1.0.0
