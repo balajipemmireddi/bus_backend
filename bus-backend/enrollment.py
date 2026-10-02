@@ -86,13 +86,24 @@ def centralized_enroll(data: CentralEnrollmentIn):
     # Delegate encoding to face_processor on Pi
     face_processor_url = get_face_processor_url()
     try:
+        # Face processor can take 30-60 seconds on Pi for multiple photos
+        # Use a longer timeout and keep-alive
         resp = requests.post(
             f"{face_processor_url}/encode",
             json={"photos": data.photos},
-            timeout=30
+            timeout=120  # Increased from 30s to 2 minutes for Pi processing
         )
         resp.raise_for_status()
         result = resp.json()
+    except requests.exceptions.Timeout:
+        return JSONResponse(
+            status_code=504,
+            content={
+                "status": "error",
+                "message": f"Face processor timeout after 120s - {len(data.photos)} photo(s) took too long to encode. "
+                           f"Try with fewer photos or check Pi performance."
+            },
+        )
     except Exception as e:
         return JSONResponse(
             status_code=502,
