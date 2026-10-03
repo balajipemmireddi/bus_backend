@@ -93,6 +93,16 @@ def init_db():
             error_msg TEXT,
             created_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS deletion_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            deletion_uuid TEXT UNIQUE NOT NULL,
+            child_id TEXT NOT NULL,
+            student_name TEXT,
+            status TEXT DEFAULT 'pending',  -- pending | completed
+            created_at TEXT NOT NULL,
+            synced_count INTEGER DEFAULT 0  -- tracks how many buses have acknowledged
+        );
         """
     )
     # Add idempotency support to existing databases without losing history.
