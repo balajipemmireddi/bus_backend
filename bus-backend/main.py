@@ -7,6 +7,7 @@ Architecture:
 - schemas.py: Pydantic models
 - enrollment.py: Student enrollment endpoints (/api/enroll, /api/enroll/centralized)
 - roster.py: Roster sync endpoints (/api/bus/{bus_id}/roster)
+- stops.py: Stop location endpoints (/api/stops, /api/stops/{stop_id})
 - events.py: Event ingest and review queue (/api/events, /api/review, /api/live)
 - devices.py: Device tracking (/api/devices, /api/devices/{bus_id}/heartbeat)
 - students.py: CRUD operations and management (/api/students/*)
@@ -45,6 +46,7 @@ from roster import router as roster_router
 from events import router as events_router
 from devices import router as devices_router
 from students import router as students_router
+from stops import router as stops_router
 from dashboards import router as dashboards_router
 
 app.include_router(enrollment_router)
@@ -52,6 +54,7 @@ app.include_router(roster_router)
 app.include_router(events_router)
 app.include_router(devices_router)
 app.include_router(students_router)
+app.include_router(stops_router)
 app.include_router(dashboards_router)
 
 
