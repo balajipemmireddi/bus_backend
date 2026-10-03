@@ -1,15 +1,30 @@
 """
-Enrollment endpoints - handles both direct /api/enroll and centralized enrollment.
-Delegates face encoding to face_processor.py on the Pi.
+Enrollment endpoints - Phase 1 normalized enrollment workflow.
+
+Five-step enrollment process:
+1. Student basic info (name, DOB, class, etc.)
+2. Guardian information (parent/emergency contact)
+3. Transport assignment (bus, route, stops)
+4. Face capture (photos from browser or camera)
+5. Review and confirm enrollment
+
+All steps collected into a single transaction for atomicity.
 """
 
 import json
 import requests
+import datetime
 from fastapi import HTTPException, APIRouter
 from fastapi.responses import JSONResponse
 
 from database import get_conn
-from schemas import StudentIn, CentralEnrollmentIn
+from schemas import (
+    EnrollmentStep1_StudentInfo,
+    EnrollmentStep2_Guardians,
+    EnrollmentStep3_Transport,
+    EnrollmentStep4_FaceCapture,
+    EnrollmentStep5_Review,
+)
 
 router = APIRouter(prefix="/api", tags=["enrollment"])
 
@@ -20,135 +35,272 @@ def get_face_processor_url():
     return os.environ.get("FACE_PROCESSOR_URL", "http://192.168.1.85:8095")
 
 
-@router.post("/enroll")
-def enroll(student: StudentIn):
+def get_default_school_id(conn):
+    """Get or create default school for enrollment."""
+    row = conn.execute("SELECT id FROM schools LIMIT 1").fetchone()
+    if row:
+        return row[0]
+    
+    # Create default school if none exists
+    now = datetime.datetime.utcnow().isoformat()
+    cursor = conn.execute(
+        """INSERT INTO schools (name, code, timezone, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        ("Default School", "DEFAULT", "Asia/Kolkata", "active", now, now)
+    )
+    return cursor.lastrowid
+
+
+@router.post("/enrollment/step1")
+def enrollment_step1(data: EnrollmentStep1_StudentInfo):
     """
-    Direct enrollment with pre-encoded face data.
-    (Used by Pi enrollment dashboard after local encoding.)
+    Step 1: Student basic information.
+    Validates uniqueness of admission_number and returns session for next step.
     """
     conn = get_conn()
-    existing = conn.execute("SELECT name FROM students WHERE child_id=?", (student.child_id,)).fetchone()
-    if existing and existing["name"] != student.name:
+    
+    # Check if admission_number already exists
+    existing = conn.execute(
+        "SELECT id FROM students WHERE admission_number=?",
+        (data.admission_number,)
+    ).fetchone()
+    
+    if existing:
         conn.close()
         raise HTTPException(
             409,
-            f"child_id '{student.child_id}' already belongs to '{existing['name']}'. "
-            f"Enrolling '{student.name}' under this ID would overwrite them. "
-            f"Use a different child_id, or explicitly confirm the overwrite."
+            f"Admission number '{data.admission_number}' already exists. "
+            f"Use a different number or update the existing student."
         )
     
-    conn.execute(
-        """INSERT INTO students (child_id, name, encodings, assigned_bus_id, pickup_stop_id, drop_stop_id, twin_group)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(child_id) DO UPDATE SET
-             name=excluded.name, encodings=excluded.encodings,
-             assigned_bus_id=excluded.assigned_bus_id,
-             pickup_stop_id=excluded.pickup_stop_id, drop_stop_id=excluded.drop_stop_id,
-             twin_group=excluded.twin_group""",
-        (student.child_id, student.name, json.dumps(student.encodings),
-         student.assigned_bus_id, student.pickup_stop_id, student.drop_stop_id, student.twin_group),
-    )
-    conn.commit()
     conn.close()
-    return {"status": "ok", "child_id": student.child_id}
+    
+    # Return session data for frontend to carry through steps
+    return {
+        "status": "ok",
+        "step": 1,
+        "session_data": {
+            "admission_number": data.admission_number,
+            "first_name": data.first_name,
+            "last_name": data.last_name,
+            "date_of_birth": data.date_of_birth,
+            "class_name": data.class_name,
+            "section": data.section,
+            "gender": data.gender,
+        }
+    }
 
 
-@router.post("/enroll/centralized")
-def centralized_enroll(data: CentralEnrollmentIn):
+@router.post("/enrollment/step2")
+def enrollment_step2(admission_number: str, data: EnrollmentStep2_Guardians):
     """
-    Centralized enrollment: browser sends base64 photos to backend, which forwards
-    them to face_processor.py on the Pi (NOT processed here - backend never imports
-    face_recognition/dlib, avoiding Windows dlib install problems entirely).
-    Pi does quality checks + encoding and returns the result; backend just stores it.
+    Step 2: Guardian information.
+    Validates and prepares guardian records.
+    """
+    if not data.guardians:
+        raise HTTPException(400, "At least one guardian is required")
+    
+    # Validate guardians have required fields
+    for g in data.guardians:
+        if not g.name:
+            raise HTTPException(400, "Guardian name is required")
+    
+    return {
+        "status": "ok",
+        "step": 2,
+        "guardians_count": len(data.guardians),
+        "message": f"Recorded {len(data.guardians)} guardian(s)"
+    }
+
+
+@router.post("/enrollment/step3")
+def enrollment_step3(admission_number: str, data: EnrollmentStep3_Transport):
+    """
+    Step 3: Transport assignment (bus, route, stops).
+    Validates bus, route, and stops exist.
+    """
+    conn = get_conn()
+    
+    # Validate bus exists
+    bus = conn.execute("SELECT id FROM buses WHERE id=?", (data.bus_id,)).fetchone()
+    if not bus:
+        conn.close()
+        raise HTTPException(404, f"Bus ID {data.bus_id} not found")
+    
+    # Validate route exists
+    route = conn.execute("SELECT id FROM routes WHERE id=?", (data.route_id,)).fetchone()
+    if not route:
+        conn.close()
+        raise HTTPException(404, f"Route ID {data.route_id} not found")
+    
+    # Validate pickup stop exists
+    pickup = conn.execute("SELECT id FROM stops WHERE id=?", (data.pickup_stop_id,)).fetchone()
+    if not pickup:
+        conn.close()
+        raise HTTPException(404, f"Pickup stop ID {data.pickup_stop_id} not found")
+    
+    # Validate drop stop exists
+    drop = conn.execute("SELECT id FROM stops WHERE id=?", (data.drop_stop_id,)).fetchone()
+    if not drop:
+        conn.close()
+        raise HTTPException(404, f"Drop stop ID {data.drop_stop_id} not found")
+    
+    conn.close()
+    
+    return {
+        "status": "ok",
+        "step": 3,
+        "bus_id": data.bus_id,
+        "route_id": data.route_id,
+        "pickup_stop_id": data.pickup_stop_id,
+        "drop_stop_id": data.drop_stop_id,
+    }
+
+
+@router.post("/enrollment/step4")
+def enrollment_step4(admission_number: str, data: EnrollmentStep4_FaceCapture):
+    """
+    Step 4: Face capture - submit photos for encoding.
+    Delegates to face_processor on Pi, gets encodings back.
     """
     if not data.photos:
-        raise HTTPException(400, "No photos provided")
-
-    # Check for existing student collision
-    conn = get_conn()
-    existing = conn.execute("SELECT name FROM students WHERE child_id=?", (data.child_id,)).fetchone()
-    conn.close()
+        raise HTTPException(400, "At least one photo is required")
     
-    if existing and existing["name"] != data.name and not data.force_overwrite:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "status": "error",
-                "message": f"child_id '{data.child_id}' already belongs to '{existing['name']}'. "
-                           f"Enrolling '{data.name}' under this ID would silently overwrite their "
-                           f"face data. Pick a different child_id for this student, or confirm the "
-                           f"overwrite if this really is meant to replace that record.",
-                "collision": True,
-                "existing_name": existing["name"],
-            },
-        )
-
     # Delegate encoding to face_processor on Pi
     face_processor_url = get_face_processor_url()
     try:
-        # Face processor can take 30-60 seconds on Pi for multiple photos
-        # Use a longer timeout and keep-alive
         resp = requests.post(
             f"{face_processor_url}/encode",
             json={"photos": data.photos},
-            timeout=120  # Increased from 30s to 2 minutes for Pi processing
+            timeout=120  # Pi can be slow
         )
         resp.raise_for_status()
         result = resp.json()
     except requests.exceptions.Timeout:
-        return JSONResponse(
-            status_code=504,
-            content={
-                "status": "error",
-                "message": f"Face processor timeout after 120s - {len(data.photos)} photo(s) took too long to encode. "
-                           f"Try with fewer photos or check Pi performance."
-            },
+        raise HTTPException(
+            504,
+            f"Face processor timeout after 120s encoding {len(data.photos)} photo(s). "
+            f"Try with fewer or better-lit photos."
         )
     except Exception as e:
-        return JSONResponse(
-            status_code=502,
-            content={
-                "status": "error",
-                "message": f"Could not reach face processor at {face_processor_url} "
-                           f"(is face_processor.py running on the Pi?): {e}"
-            },
+        raise HTTPException(
+            502,
+            f"Could not reach face processor at {face_processor_url}: {e}"
         )
-
-    good_encodings = result.get("encodings", [])
+    
+    encodings = result.get("encodings", [])
     rejections = result.get("rejections", [])
-
-    if not good_encodings:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "message": f"No usable photos. Rejections: {rejections}"
-            },
+    
+    if not encodings:
+        raise HTTPException(
+            400,
+            f"No usable face encodings from {len(data.photos)} photo(s). "
+            f"Rejections: {rejections}"
         )
-
-    # Store in database
-    conn = get_conn()
-    conn.execute(
-        """INSERT INTO students (child_id, name, encodings, assigned_bus_id, pickup_stop_id, drop_stop_id, twin_group)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(child_id) DO UPDATE SET
-             name=excluded.name, encodings=excluded.encodings,
-             assigned_bus_id=excluded.assigned_bus_id,
-             pickup_stop_id=excluded.pickup_stop_id, drop_stop_id=excluded.drop_stop_id,
-             twin_group=excluded.twin_group""",
-        (data.child_id, data.name, json.dumps(good_encodings),
-         data.bus_id, data.pickup_stop_id, data.drop_stop_id, data.twin_group),
-    )
-    conn.commit()
-    conn.close()
-
-    summary = f"Enrolled '{data.name}' with {len(good_encodings)} encodings from {len(data.photos)} photos."
-    if rejections:
-        summary += f"\n\nRejected: {', '.join(rejections)}"
-
+    
     return {
-        "status": "success",
-        "child_id": data.child_id,
-        "encodings_count": len(good_encodings),
-        "message": summary
+        "status": "ok",
+        "step": 4,
+        "encodings_count": len(encodings),
+        "photos_processed": len(data.photos),
+        "rejections": rejections,
+        "message": f"Successfully encoded {len(encodings)} face(s) from {len(data.photos)} photo(s)"
     }
+
+
+@router.post("/enrollment/step5")
+def enrollment_step5(
+    admission_number: str,
+    step1: EnrollmentStep1_StudentInfo,
+    step2: EnrollmentStep2_Guardians,
+    step3: EnrollmentStep3_Transport,
+    encodings: list,  # From step 4 result
+    step5: EnrollmentStep5_Review
+):
+    """
+    Step 5: Complete enrollment - atomically create student, guardians, transport, face profile, and encodings.
+    All-or-nothing transaction.
+    """
+    if not step5.confirmed:
+        raise HTTPException(400, "Enrollment must be confirmed")
+    
+    conn = get_conn()
+    try:
+        # Get default school
+        school_id = get_default_school_id(conn)
+        now = datetime.datetime.utcnow().isoformat()
+        
+        # 1. Create student
+        cursor = conn.execute(
+            """INSERT INTO students 
+               (school_id, admission_number, first_name, last_name, date_of_birth, 
+                class_name, section, gender, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (school_id, step1.admission_number, step1.first_name, step1.last_name,
+             step1.date_of_birth, step1.class_name, step1.section, step1.gender,
+             "active", now, now)
+        )
+        student_id = cursor.lastrowid
+        
+        # 2. Create guardians
+        guardian_ids = []
+        for i, g in enumerate(step2.guardians):
+            cursor = conn.execute(
+                """INSERT INTO guardians 
+                   (student_id, name, relationship, phone, email, is_primary, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (student_id, g.name, g.relationship, g.phone, g.email,
+                 (i == 0), now, now)  # First guardian is primary
+            )
+            guardian_ids.append(cursor.lastrowid)
+        
+        # 3. Create transport assignment
+        valid_from = datetime.datetime.utcnow().isoformat()
+        cursor = conn.execute(
+            """INSERT INTO transport_assignments
+               (student_id, bus_id, route_id, pickup_stop_id, drop_stop_id,
+                valid_from, morning_enabled, afternoon_enabled, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (student_id, step3.bus_id, step3.route_id, step3.pickup_stop_id, step3.drop_stop_id,
+             valid_from, step3.morning_enabled, step3.afternoon_enabled,
+             "active", now, now)
+        )
+        
+        # 4. Create face profile
+        cursor = conn.execute(
+            """INSERT INTO face_profiles
+               (student_id, status, encoding_count, quality_score, enrolled_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (student_id, "active", len(encodings), 1.0, now, now)
+        )
+        face_profile_id = cursor.lastrowid
+        
+        # 5. Store face encodings
+        for encoding in encodings:
+            enc_json = json.dumps(encoding)
+            conn.execute(
+                """INSERT INTO face_encodings
+                   (face_profile_id, encoding, quality_score, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (face_profile_id, enc_json, 1.0, now)
+            )
+        
+        conn.commit()
+        
+        return {
+            "status": "success",
+            "student_id": student_id,
+            "admission_number": step1.admission_number,
+            "first_name": step1.first_name,
+            "last_name": step1.last_name,
+            "guardians": len(guardian_ids),
+            "encodings": len(encodings),
+            "message": f"Enrolled {step1.first_name} {step1.last_name} with {len(encodings)} face encodings"
+        }
+    
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(500, f"Enrollment failed: {str(e)}")
+    
+    finally:
+        conn.close()
