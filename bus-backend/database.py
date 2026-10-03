@@ -4,9 +4,27 @@ Centralizes SQLite schema and connection management.
 """
 
 import sqlite3
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
-DB_PATH = Path(__file__).parent / "data" / "backend.db"
+load_dotenv()
+
+# Support DATABASE_URL from environment or fall back to local path
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///data/backend.db")
+
+# Parse DATABASE_URL to get the file path
+if DATABASE_URL.startswith("sqlite:///"):
+    # Remove 'sqlite:///' prefix and handle both relative and absolute paths
+    db_file = DATABASE_URL[10:]  # Remove 'sqlite:///'
+    if not os.path.isabs(db_file):
+        # Relative path - resolve relative to this file's directory
+        db_file = str(Path(__file__).parent / db_file)
+    DB_PATH = Path(db_file)
+else:
+    # Fallback to default
+    DB_PATH = Path(__file__).parent / "data" / "backend.db"
+
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
@@ -19,6 +37,7 @@ def get_conn():
 
 def init_db():
     """Initialize database schema."""
+    print(f"[DB] Using database: {DB_PATH}")
     conn = get_conn()
     conn.executescript(
         """

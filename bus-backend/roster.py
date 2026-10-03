@@ -14,11 +14,15 @@ router = APIRouter(prefix="/api", tags=["roster"])
 @router.get("/bus/{bus_id}/roster")
 def get_roster(bus_id: str):
     """
-    Full roster sync for a bus (§12: full roster to every device).
-    Returns all students - every Pi gets everything on each sync.
+    Full roster sync for a bus (§12: roster filtered by bus assignment).
+    Returns only students assigned to this bus_id for pickup/drop tracking.
     """
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM students").fetchall()
+    # Filter by assigned_bus_id to reduce unnecessary data transfer and memory usage
+    rows = conn.execute(
+        "SELECT * FROM students WHERE assigned_bus_id=? OR assigned_bus_id IS NULL",
+        (bus_id,)
+    ).fetchall()
     conn.close()
     
     return [
