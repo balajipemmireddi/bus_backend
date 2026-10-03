@@ -128,7 +128,59 @@ def enrollment_dashboard():
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             document.getElementById(name).style.display = 'block';
             event.target.classList.add('active');
+            
+            // Load events when events tab is opened
+            if (name === 'events') {
+                loadEvents();
+            }
+            // Load students when students tab is opened
+            if (name === 'students') {
+                loadStudentsForDashboard();
+            }
         }
+        
+        function loadEvents() {
+            fetch('/api/live')
+                .then(r => r.json())
+                .then(events => {
+                    const tbody = document.getElementById('eventsList');
+                    tbody.innerHTML = '';
+                    if (!events || events.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #999;">No events yet</td></tr>';
+                        return;
+                    }
+                    events.forEach(e => {
+                        const row = tbody.insertRow();
+                        const time = new Date(e.timestamp).toLocaleString();
+                        row.innerHTML = `<td>${time}</td><td>${e.child_id || 'Unknown'}</td><td>${e.event_type}</td>`;
+                    });
+                })
+                .catch(err => {
+                    document.getElementById('eventsList').innerHTML = '<tr><td colspan="3" style="color: #c11;</td>Error loading events</td></tr>';
+                });
+        }
+        
+        function loadStudentsForDashboard() {
+            fetch('/api/students')
+                .then(r => r.json())
+                .then(data => {
+                    const students = data.students || data;
+                    const tbody = document.getElementById('studentsList');
+                    tbody.innerHTML = '';
+                    if (!students || students.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #999;">No students enrolled</td></tr>';
+                        return;
+                    }
+                    students.forEach(s => {
+                        const row = tbody.insertRow();
+                        row.innerHTML = `<td>${s.child_id}</td><td>${s.name}</td><td>${s.assigned_bus_id || 'N/A'}</td>`;
+                    });
+                })
+                .catch(err => {
+                    document.getElementById('studentsList').innerHTML = '<tr><td colspan="3" style="color: #c11;">Error loading students</td></tr>';
+                });
+        }
+        
         document.getElementById('enrollForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const files = document.getElementById('photos').files;
