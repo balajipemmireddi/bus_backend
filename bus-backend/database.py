@@ -42,8 +42,9 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_uuid TEXT,
             child_id TEXT,
-            event_type TEXT NOT NULL,
+            event_type TEXT NOT NULL,  -- PICKED_UP | DROPPED | EXIT_UNEXPECTED_LOCATION | UNMATCHED_REVIEW | AMBIGUOUS_REVIEW
             confidence REAL,
             photo_path TEXT,
             gps_lat REAL,
@@ -75,5 +76,10 @@ def init_db():
         );
         """
     )
+    # Add idempotency support to existing databases without losing history.
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(events)")}
+    if "event_uuid" not in columns:
+        conn.execute("ALTER TABLE events ADD COLUMN event_uuid TEXT")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_uuid ON events(event_uuid)")
     conn.commit()
     conn.close()

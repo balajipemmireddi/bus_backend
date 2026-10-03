@@ -3,6 +3,7 @@ Event endpoints - ingestion and review queue for edge device events.
 """
 
 import datetime
+import uuid
 from fastapi import APIRouter, HTTPException
 
 from database import get_conn
@@ -18,24 +19,29 @@ def ingest_event(event: EventIn):
     Events are queued for later review or processed automatically.
     """
     conn = get_conn()
-    review_status = "pending" if event.event_type == "UNMATCHED_REVIEW" else "n/a"
+    # Mark UNMATCHED_REVIEW and AMBIGUOUS_REVIEW as pending for manual review
+    review_status = "pending" if event.event_type in ("UNMATCHED_REVIEW", "AMBIGUOUS_REVIEW") else "n/a"
     ts = event.timestamp or datetime.datetime.now().isoformat()
+    event_uuid = event.event_uuid or str(uuid.uuid4())
     
     cur = conn.execute(
-        """INSERT INTO events (child_id, event_type, confidence, photo_path, gps_lat, gps_lng, bus_id, timestamp, review_status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (event.child_id, event.event_type, event.confidence, event.photo_path,
+        """INSERT OR IGNORE INTO events
+           (event_uuid, child_id, event_type, confidence, photo_path, gps_lat, gps_lng, bus_id, timestamp, review_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (event_uuid, event.child_id, event.event_type, event.confidence, event.photo_path,
          event.gps_lat, event.gps_lng, event.bus_id, ts, review_status),
     )
     conn.commit()
-    event_id = cur.lastrowid
+    inserted = cur.rowcount == 1
+    row = conn.execute("SELECT id FROM events WHERE event_uuid=?", (event_uuid,)).fetchone()
+    event_id = row["id"]
     conn.close()
 
     # In production: trigger WhatsApp send for PICKED_UP/DROPPED (Phase 6 - not built yet)
-    if event.event_type in ("PICKED_UP", "DROPPED"):
+    if inserted and event.event_type in ("PICKED_UP", "DROPPED"):
         print(f"[WOULD SEND WHATSAPP] {event.event_type} for {event.child_id} on {event.bus_id}")
 
-    return {"status": "ok", "event_id": event_id}
+    return {"status": "ok", "event_id": event_id, "duplicate": not inserted}
 
 
 @router.get("/review")

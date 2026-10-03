@@ -27,8 +27,9 @@ class StudentUpdate(BaseModel):
 
 class EventIn(BaseModel):
     """Schema for event ingestion from edge devices."""
+    event_uuid: str | None = None
     child_id: str
-    event_type: str  # PICKED_UP | DROPPED | EXIT_UNEXPECTED_LOCATION | UNMATCHED_REVIEW
+    event_type: str  # PICKED_UP | DROPPED | EXIT_UNEXPECTED_LOCATION | UNMATCHED_REVIEW | AMBIGUOUS_REVIEW
     confidence: float
     photo_path: str | None = ""
     gps_lat: float | None = None
